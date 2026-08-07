@@ -100,6 +100,7 @@ def validate_decision(decision: dict[str, Any], observation: dict[str, Any]) -> 
 async def main() -> None:
     url = os.environ["COWORLD_PLAYER_WS_URL"]
     require_llm = os.environ.get("REQUIRE_LLM", "").lower() in {"1", "true", "yes"}
+    max_attempts = int(os.environ.get("MODEL_MAX_ATTEMPTS", "5" if require_llm else "1"))
     async with websockets.connect(url) as websocket:
         slot: int | None = None
         async for raw_message in websocket:
@@ -111,15 +112,35 @@ async def main() -> None:
                 return
             if observation["type"] != "observation" or slot is None:
                 continue
-            try:
-                action = await asyncio.to_thread(call_model, prompt_for(observation, slot))
-                decision = extract_action(action)
-                validate_decision(decision, observation)
-            except Exception as exc:
+            decision: dict[str, Any] | None = None
+            model_error: Exception | None = None
+            for attempt in range(max_attempts):
+                try:
+                    action = await asyncio.to_thread(call_model, prompt_for(observation, slot))
+                    decision = extract_action(action)
+                    validate_decision(decision, observation)
+                    break
+                except Exception as exc:
+                    model_error = exc
+                    if attempt + 1 < max_attempts:
+                        delay = 0.5 * (attempt + 1) + 0.15 * slot
+                        print(
+                            f"model attempt {attempt + 1}/{max_attempts} failed on turn "
+                            f"{observation['turn']}; retrying in {delay:.2f}s: {exc}",
+                            flush=True,
+                        )
+                        await asyncio.sleep(delay)
+
+            if decision is None:
+                assert model_error is not None
                 if require_llm:
-                    print(f"required model call failed on turn {observation['turn']}: {exc}", flush=True)
-                    raise
-                print(f"model call failed; using deterministic fallback: {exc}", flush=True)
+                    print(
+                        f"required model call failed on turn {observation['turn']} after "
+                        f"{max_attempts} attempts: {model_error}",
+                        flush=True,
+                    )
+                    raise model_error
+                print(f"model call failed; using deterministic fallback: {model_error}", flush=True)
                 decision = fallback_action(observation, slot)
             else:
                 print(

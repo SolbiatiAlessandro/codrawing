@@ -58,6 +58,7 @@ class WorkflowHelpersTest(unittest.TestCase):
                 request["game_config_overrides"]["player_connect_timeout_seconds"],
                 120,
             )
+            self.assertEqual(request["game_config_overrides"]["action_timeout_seconds"], 60)
 
     def test_strict_log_check_requires_every_agent_and_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

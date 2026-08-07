@@ -200,7 +200,7 @@
           "elephant"
         ],
         "player_connect_timeout_seconds": 120,
-        "action_timeout_seconds": 15,
+        "action_timeout_seconds": 60,
         "players": [
           {
             "name": "Artist 1"

@@ -25,7 +25,7 @@ def create(
             "max_turns": turns,
             "targets": [target],
             "player_connect_timeout_seconds": 120,
-            "action_timeout_seconds": 15,
+            "action_timeout_seconds": 60,
         },
         "roster": [
             {"player": {"policy_ref": policy_ref}, "slot": slot}

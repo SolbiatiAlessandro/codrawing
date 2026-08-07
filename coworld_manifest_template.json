@@ -7,7 +7,7 @@
   ],
   "game": {
     "name": "codrawing",
-    "description": "Five agents coordinate through one public message and one pixel per turn to draw a shared target. This MVP is judged by a human through its replay viewer.",
+    "description": "Five agents coordinate through one public message and one pixel per turn to draw a shared target. Every turn, a small frozen ImageNet classifier returns shared feedback; a human can also judge the replay.",
     "owner": "Alessandro",
     "runnable": {
       "type": "game",
@@ -107,12 +107,95 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "additionalProperties": false,
+      "$defs": {
+        "prediction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label",
+            "probability"
+          ],
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "image_model_feedback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "model",
+            "turn",
+            "target_score",
+            "score_delta",
+            "pass_threshold",
+            "passing",
+            "target_rank",
+            "best_target_label",
+            "top_predictions"
+          ],
+          "properties": {
+            "model": {
+              "type": "string",
+              "const": "squeezenet1_1_imagenet1k_v1"
+            },
+            "turn": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "target_score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "score_delta": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1
+            },
+            "pass_threshold": {
+              "type": "number",
+              "const": 0.5
+            },
+            "passing": {
+              "type": "boolean"
+            },
+            "target_rank": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "best_target_label": {
+              "type": "string"
+            },
+            "top_predictions": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5,
+              "items": {
+                "$ref": "#/$defs/prediction"
+              }
+            }
+          }
+        }
+      },
       "required": [
         "scores",
         "target",
         "turns",
         "accepted_pixels",
-        "final_canvas"
+        "final_canvas",
+        "image_model",
+        "evaluation_threshold",
+        "evaluation_passed",
+        "final_image_model_feedback",
+        "image_model_score_trace"
       ],
       "properties": {
         "scores": {
@@ -149,6 +232,27 @@
           "items": {
             "type": "string",
             "pattern": "^#[0-9A-F]{6}$"
+          }
+        },
+        "image_model": {
+          "type": "string",
+          "const": "squeezenet1_1_imagenet1k_v1"
+        },
+        "evaluation_threshold": {
+          "type": "number",
+          "const": 0.5
+        },
+        "evaluation_passed": {
+          "type": "boolean"
+        },
+        "final_image_model_feedback": {
+          "$ref": "#/$defs/image_model_feedback"
+        },
+        "image_model_score_trace": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/image_model_feedback"
           }
         }
       }
@@ -189,7 +293,7 @@
     {
       "id": "human-review",
       "name": "Human review",
-      "description": "A 24x24, five-agent episode with enough turns for a compact pixel drawing.",
+      "description": "A 24x24, five-agent episode with a small shared image classifier reporting progress every turn.",
       "game_config": {
         "width": 24,
         "height": 24,

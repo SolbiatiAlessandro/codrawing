@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import json
 import os
 import re
@@ -18,8 +19,63 @@ SEAT_ROLES = (
     "head and facial features",
     "body, legs, and grounding",
     "ears, tail, and distinctive details",
-    "fill gaps and improve overall readability",
+    "score captain: interpret classifier feedback, run experiments, and direct the team",
 )
+SCORE_CAPTAIN_SLOT = 4
+
+
+@dataclass
+class AgentMemory:
+    best_score: float = -1.0
+    best_turn: int = 0
+    recent_scores: list[tuple[int, float]] = field(default_factory=list)
+    last_action: dict[str, Any] | None = None
+    last_outcome: str = "no prior action"
+
+    def observe(self, observation: dict[str, Any], slot: int) -> None:
+        feedback = observation.get("image_model_feedback")
+        if feedback:
+            score = float(feedback["target_score"])
+            turn = int(feedback["turn"])
+            self.recent_scores.append((turn, score))
+            self.recent_scores = self.recent_scores[-8:]
+            if score > self.best_score:
+                self.best_score = score
+                self.best_turn = turn
+
+        if self.last_action is None or observation["turn"] == 0:
+            return
+        if slot in observation.get("previous_collision_slots", []):
+            self.last_outcome = "collision-dropped; the canvas did not receive it"
+        elif slot in observation.get("previous_accepted_slots", []):
+            delta = float(feedback["score_delta"]) if feedback else 0.0
+            self.last_outcome = f"accepted; simultaneous team score delta {delta:+.8f}"
+        else:
+            self.last_outcome = "not accepted (late or invalid)"
+
+    def remember_action(self, decision: dict[str, Any]) -> None:
+        paint = decision["paint"]
+        self.last_action = {
+            "x": int(paint["x"]),
+            "y": int(paint["y"]),
+            "color": str(paint["color"]),
+        }
+
+    def prompt_summary(self) -> str:
+        history = ", ".join(
+            f"T{turn}={score:.8f}" for turn, score in self.recent_scores
+        ) or "none"
+        last_action = json.dumps(self.last_action, separators=(",", ":")) if self.last_action else "none"
+        best = (
+            f"{self.best_score:.8f} at turn {self.best_turn}"
+            if self.best_score >= 0
+            else "none"
+        )
+        return f"""Private experimental memory carried across model calls:
+- best target score seen: {best}
+- recent score history: {history}
+- your last submitted pixel: {last_action}
+- its observed outcome: {self.last_outcome}"""
 
 
 def extract_action(text: str) -> dict[str, Any]:
@@ -33,7 +89,11 @@ def extract_action(text: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def prompt_for(observation: dict[str, Any], slot: int) -> str:
+def prompt_for(
+    observation: dict[str, Any],
+    slot: int,
+    memory: AgentMemory | None = None,
+) -> str:
     width, height = observation["width"], observation["height"]
     painted = []
     for index, color in enumerate(observation["canvas"]):
@@ -42,19 +102,58 @@ def prompt_for(observation: dict[str, Any], slot: int) -> str:
     messages = "\n".join(
         f"T{item['turn']} {item['player']}: {item['text']}" for item in observation["recent_messages"]
     ) or "(none yet)"
+    feedback = observation.get("image_model_feedback")
+    if feedback:
+        top_predictions = ", ".join(
+            f"{item['label']} {item['probability']:.2%}"
+            for item in feedback["top_predictions"]
+        )
+        image_model_feedback = f"""Shared image-model feedback after turn {feedback['turn']}:
+- target score: {feedback['target_score']:.6f} ({feedback['score_delta']:+.6f} this turn)
+- evaluation: {'PASSING' if feedback['passing'] else 'NOT PASSING'}; the team passes only with a final target score strictly greater than {feedback['pass_threshold']:.0%}
+- best target label: {feedback['best_target_label']} (rank {feedback['target_rank']} of 1000)
+- top predictions: {top_predictions}
+This small classifier is imperfect. Treat score changes as team evidence, not as an instruction to erase a
+recognizable drawing or chase unrelated labels."""
+    else:
+        image_model_feedback = """Shared image-model feedback: unavailable in this run.
+The team passes only with a final target score strictly greater than 50%."""
+    memory_summary = memory.prompt_summary() if memory else "Private experimental memory: none yet."
+    if slot == SCORE_CAPTAIN_SLOT:
+        score_protocol = """You are the sole SCORE CAPTAIN. Classifier score is the primary objective; visual resemblance is a useful prior.
+Use a controlled black-box optimization loop:
+1. OBSERVE the latest numeric delta and compare current score with the best score in memory.
+2. RETAIN edits that raise the score. If your last accepted painted pixel coincided with a negative delta, strongly
+   consider erasing that exact pixel with #FFFFFF before trying a new hypothesis.
+3. EXPERIMENT with compact, contiguous, symmetric cat-like regions. The current thin isolated strokes are being
+   classified as tools such as candles and whistles, so do not continue them when their score trend is negative.
+4. DIRECT the other seats with one concrete region or coordinate hypothesis for the next turn.
+Your public message must start `SCORE` and include the current score, signed delta, RETAIN/REJECT verdict, and directive."""
+    else:
+        score_protocol = f"""Seat {SCORE_CAPTAIN_SLOT} is the SCORE CAPTAIN. Treat its latest specific directive as higher priority than your
+original drawing role. Compare the numeric delta with your last action; do not repeat a strategy through consecutive
+negative deltas. You may erase one of your own harmful pixels with #FFFFFF. Your public message must start `DELTA`
+and state the signed delta plus the experiment you are performing."""
     return f"""You are artist seat {slot} in a five-agent collaborative pixel-art game.
 Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.
 Turn: {observation['turn']} of {observation['max_turns']}.
-Your assigned paint color is {SEAT_COLORS[slot]}; always use exactly this color.
+Your assigned paint color is {SEAT_COLORS[slot]}. Use exactly this color for paint; #FFFFFF is allowed only to erase
+a prior harmful pixel.
 Your specialization is {SEAT_ROLES[slot]}. Prefer that responsibility and avoid coordinates announced by others.
 Painted pixels as x,y:#RRGGBB (all omitted pixels are white):
 {'; '.join(painted) if painted else '(blank canvas)'}
 Recent public board:
 {messages}
 
-Coordinate with the other artists and improve the recognizable image. Choose exactly one pixel and a short public
-message. Call the paint_pixel tool exactly once and do not add prose.
+{image_model_feedback}
+
+{memory_summary}
+
+{score_protocol}
+
+Choose exactly one experimental pixel and a short evidence-based public message. Call the paint_pixel tool exactly
+once and do not add prose.
 """
 
 
@@ -71,7 +170,7 @@ def extract_model_output(payload: dict[str, Any]) -> str:
     )
 
 
-def call_model(prompt: str) -> str:
+def call_model(prompt: str, slot: int) -> str:
     sidecar = os.environ.get("AWS_ENDPOINT_URL_BEDROCK_RUNTIME")
     model = os.environ["BEDROCK_MODEL"] if sidecar else os.environ["ANTHROPIC_MODEL"]
     request_body: dict[str, Any] = {
@@ -96,7 +195,10 @@ def call_model(prompt: str) -> str:
                             "properties": {
                                 "x": {"type": "integer"},
                                 "y": {"type": "integer"},
-                                "color": {"type": "string"},
+                                "color": {
+                                    "type": "string",
+                                    "enum": [SEAT_COLORS[slot], "#FFFFFF"],
+                                },
                             },
                         },
                     },
@@ -145,11 +247,20 @@ def validate_decision(decision: dict[str, Any], observation: dict[str, Any]) -> 
         raise ValueError("color must use #RRGGBB")
 
 
+def enforce_seat_color(decision: dict[str, Any], slot: int) -> None:
+    paint = decision.get("paint")
+    if not isinstance(paint, dict):
+        return
+    requested_color = str(paint.get("color", "")).upper()
+    paint["color"] = "#FFFFFF" if requested_color == "#FFFFFF" else SEAT_COLORS[slot]
+
+
 async def main() -> None:
     url = os.environ["COWORLD_PLAYER_WS_URL"]
     require_llm = os.environ.get("REQUIRE_LLM", "").lower() in {"1", "true", "yes"}
     max_attempts = int(os.environ.get("MODEL_MAX_ATTEMPTS", "4" if require_llm else "1"))
     stagger_seconds = float(os.environ.get("MODEL_STAGGER_SECONDS", "3" if require_llm else "0"))
+    memory = AgentMemory()
     async with websockets.connect(url) as websocket:
         slot: int | None = None
         async for raw_message in websocket:
@@ -161,16 +272,20 @@ async def main() -> None:
                 return
             if observation["type"] != "observation" or slot is None:
                 continue
+            memory.observe(observation, slot)
             if stagger_seconds:
                 await asyncio.sleep(slot * stagger_seconds)
             decision: dict[str, Any] | None = None
             model_error: Exception | None = None
             for attempt in range(max_attempts):
                 try:
-                    action = await asyncio.to_thread(call_model, prompt_for(observation, slot))
+                    action = await asyncio.to_thread(
+                        call_model,
+                        prompt_for(observation, slot, memory),
+                        slot,
+                    )
                     decision = extract_action(action)
-                    if isinstance(decision.get("paint"), dict):
-                        decision["paint"]["color"] = SEAT_COLORS[slot]
+                    enforce_seat_color(decision, slot)
                     validate_decision(decision, observation)
                     break
                 except Exception as exc:
@@ -201,6 +316,7 @@ async def main() -> None:
                     flush=True,
                 )
             decision["turn"] = observation["turn"]
+            memory.remember_action(decision)
             await websocket.send(json.dumps(decision))
 
 

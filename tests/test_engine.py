@@ -3,9 +3,13 @@ from __future__ import annotations
 import unittest
 
 from codrawing.game.engine import PixelArtEngine, choose_target
+from codrawing.game.image_model import MODEL_NAME, PASS_THRESHOLD, TARGET_INDICES
 from codrawing.player.llm_player import (
+    AgentMemory,
     SEAT_COLORS,
     SEAT_ROLES,
+    SCORE_CAPTAIN_SLOT,
+    enforce_seat_color,
     extract_action,
     extract_model_output,
     prompt_for,
@@ -110,6 +114,83 @@ class TemplateTest(unittest.TestCase):
                 prompt_for(observation, slot),
             )
             self.assertIn(f"specialization is {SEAT_ROLES[slot]}", prompt_for(observation, slot))
+
+    def test_llm_prompt_includes_shared_image_model_feedback(self) -> None:
+        observation = {
+            "width": 8,
+            "height": 8,
+            "canvas": ["#FFFFFF"] * 64,
+            "recent_messages": [],
+            "target": "cat",
+            "turn": 2,
+            "max_turns": 50,
+            "image_model_feedback": {
+                "model": MODEL_NAME,
+                "turn": 2,
+                "target_score": 0.012345,
+                "score_delta": 0.001,
+                "pass_threshold": PASS_THRESHOLD,
+                "passing": False,
+                "target_rank": 17,
+                "best_target_label": "tabby",
+                "top_predictions": [
+                    {"label": "comic book", "probability": 0.12},
+                    {"label": "tabby", "probability": 0.01},
+                ],
+            },
+        }
+        prompt = prompt_for(observation, 0)
+        self.assertIn("target score: 0.012345 (+0.001000 this turn)", prompt)
+        self.assertIn("team passes only with a final target score strictly greater than 50%", prompt)
+        self.assertIn("evaluation: NOT PASSING", prompt)
+        self.assertIn("best target label: tabby (rank 17 of 1000)", prompt)
+        self.assertIn("comic book 12.00%", prompt)
+
+    def test_image_model_target_groups_use_expected_imagenet_classes(self) -> None:
+        self.assertEqual(TARGET_INDICES["cat"], tuple(range(281, 286)))
+        self.assertEqual(len(TARGET_INDICES["dog"]), 118)
+        self.assertEqual(TARGET_INDICES["elephant"], (101, 385, 386))
+
+    def test_score_captain_receives_persistent_experimental_memory(self) -> None:
+        memory = AgentMemory(
+            last_action={"x": 3, "y": 4, "color": SEAT_COLORS[SCORE_CAPTAIN_SLOT]}
+        )
+        observation = {
+            "width": 8,
+            "height": 8,
+            "canvas": ["#FFFFFF"] * 64,
+            "recent_messages": [],
+            "target": "cat",
+            "turn": 1,
+            "max_turns": 50,
+            "previous_accepted_slots": [SCORE_CAPTAIN_SLOT],
+            "previous_collision_slots": [],
+            "image_model_feedback": {
+                "model": MODEL_NAME,
+                "turn": 1,
+                "target_score": 0.002,
+                "score_delta": -0.001,
+                "pass_threshold": PASS_THRESHOLD,
+                "passing": False,
+                "target_rank": 250,
+                "best_target_label": "tabby",
+                "top_predictions": [{"label": "whistle", "probability": 0.1}],
+            },
+        }
+        memory.observe(observation, SCORE_CAPTAIN_SLOT)
+        prompt = prompt_for(observation, SCORE_CAPTAIN_SLOT, memory)
+        self.assertIn("sole SCORE CAPTAIN", prompt)
+        self.assertIn("accepted; simultaneous team score delta -0.00100000", prompt)
+        self.assertIn("erasing that exact pixel with #FFFFFF", prompt)
+
+    def test_white_is_an_eraser_and_other_colors_are_seat_locked(self) -> None:
+        erase = action(1, 2, "#ffffff")
+        enforce_seat_color(erase, 2)
+        self.assertEqual(erase["paint"]["color"], "#FFFFFF")
+
+        paint = action(1, 2, "#000000")
+        enforce_seat_color(paint, 2)
+        self.assertEqual(paint["paint"]["color"], SEAT_COLORS[2])
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from codrawing.game.engine import PixelArtEngine, choose_target
-from codrawing.game.image_model import MODEL_NAME, TARGET_INDICES
+from codrawing.game.image_model import MODEL_NAME, PASS_THRESHOLD, TARGET_INDICES
 from codrawing.player.llm_player import (
     SEAT_COLORS,
     SEAT_ROLES,
@@ -126,6 +126,8 @@ class TemplateTest(unittest.TestCase):
                 "turn": 2,
                 "target_score": 0.012345,
                 "score_delta": 0.001,
+                "pass_threshold": PASS_THRESHOLD,
+                "passing": False,
                 "target_rank": 17,
                 "best_target_label": "tabby",
                 "top_predictions": [
@@ -136,6 +138,8 @@ class TemplateTest(unittest.TestCase):
         }
         prompt = prompt_for(observation, 0)
         self.assertIn("target score: 0.012345 (+0.001000 this turn)", prompt)
+        self.assertIn("team passes only with a final target score strictly greater than 50%", prompt)
+        self.assertIn("evaluation: NOT PASSING", prompt)
         self.assertIn("best target label: tabby (rank 17 of 1000)", prompt)
         self.assertIn("comic book 12.00%", prompt)
 

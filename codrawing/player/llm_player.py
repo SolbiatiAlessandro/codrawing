@@ -50,12 +50,14 @@ def prompt_for(observation: dict[str, Any], slot: int) -> str:
         )
         image_model_feedback = f"""Shared image-model feedback after turn {feedback['turn']}:
 - target score: {feedback['target_score']:.6f} ({feedback['score_delta']:+.6f} this turn)
+- evaluation: {'PASSING' if feedback['passing'] else 'NOT PASSING'}; the team passes only with a final target score strictly greater than {feedback['pass_threshold']:.0%}
 - best target label: {feedback['best_target_label']} (rank {feedback['target_rank']} of 1000)
 - top predictions: {top_predictions}
 This small classifier is imperfect. Treat score changes as team evidence, not as an instruction to erase a
 recognizable drawing or chase unrelated labels."""
     else:
-        image_model_feedback = "Shared image-model feedback: unavailable in this run."
+        image_model_feedback = """Shared image-model feedback: unavailable in this run.
+The team passes only with a final target score strictly greater than 50%."""
     return f"""You are artist seat {slot} in a five-agent collaborative pixel-art game.
 Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.

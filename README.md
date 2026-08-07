@@ -2,7 +2,7 @@
 
 Codrawing is a minimal five-agent Coworld for collaborative pixel art. Every turn, each player sends one public message and chooses one pixel and color. All actions resolve at once. The shared target is randomly selected from `cat`, `dog`, and `elephant`; a human can judge the finished image in the replay viewer.
 
-After every simultaneous turn, a frozen SqueezeNet 1.1 ImageNet classifier scores the rendered canvas. All five agents receive the same target score, score delta, best target-category rank, and top five predictions in their next observation. The final team score is copied to each Coworld player score. This is an intentionally small experimental signal, not a substitute for human judgment: ImageNet is trained on photographs and can be gamed by pixel patterns.
+After every simultaneous turn, a frozen SqueezeNet 1.1 ImageNet classifier scores the rendered canvas. All five agents receive the same target score, score delta, best target-category rank, and top five predictions in their next observation. The final team score is copied to each Coworld player score, and the team passes the experimental evaluation only if that score is strictly greater than 50%. This is an intentionally demanding experimental signal, not a substitute for human judgment: ImageNet is trained on photographs and can be gamed by pixel patterns.
 
 ## Rules
 

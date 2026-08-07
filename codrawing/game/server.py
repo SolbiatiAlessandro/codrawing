@@ -17,7 +17,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
 from codrawing.game.engine import PixelArtEngine, choose_target
-from codrawing.game.image_model import ImageModelScorer, scorer_from_environment
+from codrawing.game.image_model import PASS_THRESHOLD, ImageModelScorer, scorer_from_environment
 
 
 CLIENT_DIR = Path(__file__).parent / "client"
@@ -282,6 +282,8 @@ async def _play_game() -> None:
         team_score = float(runtime.image_model_feedback["target_score"])
         results["scores"] = [team_score] * len(engine.player_names)
         results["image_model"] = runtime.image_model_feedback["model"]
+        results["evaluation_threshold"] = PASS_THRESHOLD
+        results["evaluation_passed"] = team_score > PASS_THRESHOLD
         results["final_image_model_feedback"] = runtime.image_model_feedback
         results["image_model_score_trace"] = runtime.image_model_score_trace
     replay = {"config": CONFIG, "frames": runtime.frames, "results": results}

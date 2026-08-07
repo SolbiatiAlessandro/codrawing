@@ -7,6 +7,7 @@ from typing import Any
 
 
 MODEL_NAME = "squeezenet1_1_imagenet1k_v1"
+PASS_THRESHOLD = 0.5
 
 # ILSVRC-2012 indices in TorchVision's canonical category order. A group score
 # is useful here because ImageNet splits cats, dogs, and elephants into breeds.
@@ -79,6 +80,8 @@ class ImageModelScorer:
             "turn": turn,
             "target_score": target_score,
             "score_delta": delta,
+            "pass_threshold": PASS_THRESHOLD,
+            "passing": target_score > PASS_THRESHOLD,
             "target_rank": target_rank,
             "best_target_label": self.labels[best_target_index],
             "top_predictions": [

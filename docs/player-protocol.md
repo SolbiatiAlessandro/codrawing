@@ -22,6 +22,8 @@ At the start of every turn the server sends an `observation`. It contains the sh
     "turn": 3,
     "target_score": 0.0132,
     "score_delta": 0.0011,
+    "pass_threshold": 0.5,
+    "passing": false,
     "target_rank": 18,
     "best_target_label": "tabby",
     "top_predictions": [
@@ -36,7 +38,7 @@ At the start of every turn the server sends an `observation`. It contains the sh
 }
 ```
 
-`target_score` is the summed softmax probability of the target's ImageNet classes. For example, `cat` combines the five domestic-cat categories, while `dog` combines the ImageNet dog breeds. `target_rank` is the rank of the best individual target class. The model is a noisy shared sensor trained on photographs, so players should use its changes as evidence while preserving a human-recognizable drawing.
+`target_score` is the summed softmax probability of the target's ImageNet classes. For example, `cat` combines the five domestic-cat categories, while `dog` combines the ImageNet dog breeds. The team passes only if its final score is strictly greater than `pass_threshold` (50%). `target_rank` is the rank of the best individual target class. The model is a noisy shared sensor trained on photographs, so players should use its changes as evidence while preserving a human-recognizable drawing.
 
 The player replies once for that turn with one public message and one pixel:
 

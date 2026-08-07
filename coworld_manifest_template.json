@@ -134,6 +134,8 @@
             "turn",
             "target_score",
             "score_delta",
+            "pass_threshold",
+            "passing",
             "target_rank",
             "best_target_label",
             "top_predictions"
@@ -156,6 +158,13 @@
               "type": "number",
               "minimum": -1,
               "maximum": 1
+            },
+            "pass_threshold": {
+              "type": "number",
+              "const": 0.5
+            },
+            "passing": {
+              "type": "boolean"
             },
             "target_rank": {
               "type": "integer",
@@ -181,7 +190,12 @@
         "target",
         "turns",
         "accepted_pixels",
-        "final_canvas"
+        "final_canvas",
+        "image_model",
+        "evaluation_threshold",
+        "evaluation_passed",
+        "final_image_model_feedback",
+        "image_model_score_trace"
       ],
       "properties": {
         "scores": {
@@ -223,6 +237,13 @@
         "image_model": {
           "type": "string",
           "const": "squeezenet1_1_imagenet1k_v1"
+        },
+        "evaluation_threshold": {
+          "type": "number",
+          "const": 0.5
+        },
+        "evaluation_passed": {
+          "type": "boolean"
         },
         "final_image_model_feedback": {
           "$ref": "#/$defs/image_model_feedback"

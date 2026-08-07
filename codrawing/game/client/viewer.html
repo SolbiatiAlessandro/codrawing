@@ -61,7 +61,9 @@
     document.querySelector('#max-turns').textContent = frame.max_turns;
     const feedback = frame.image_model_feedback;
     document.querySelector('#model-feedback').textContent = feedback
-      ? `SqueezeNet target score ${(100 * feedback.target_score).toFixed(3)}% · ` +
+      ? `${feedback.passing ? 'PASSING' : 'NOT PASSING'} · ` +
+        `SqueezeNet target score ${(100 * feedback.target_score).toFixed(3)}% ` +
+        `(need >${(100 * feedback.pass_threshold).toFixed(0)}%) · ` +
         `Δ ${(100 * feedback.score_delta).toFixed(3)}% · ` +
         `${feedback.best_target_label} rank ${feedback.target_rank}`
       : 'Image-model feedback: unavailable';

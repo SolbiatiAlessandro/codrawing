@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 45
     env:
       COWORLD_VERSION: "0.1.35"
+      SOFTMAX_CLI_VERSION: "0.26.27"
       DOCKER_DEFAULT_PLATFORM: linux/amd64
       SOFTMAX_TOKEN: ${{ secrets.SOFTMAX_TOKEN }}
 
@@ -51,6 +52,7 @@ jobs:
         run: |
           uv sync
           uv tool install "coworld[auth]==${COWORLD_VERSION}"
+          uv tool install "softmax-cli==${SOFTMAX_CLI_VERSION}"
 
       - name: Require Softmax credential
         run: |

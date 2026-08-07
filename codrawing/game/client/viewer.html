@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Codrawing</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { margin: 0; background: #0b1020; color: #e5e7eb; }
+    main { display: grid; grid-template-columns: minmax(320px, 640px) minmax(260px, 1fr); gap: 24px; padding: 24px; }
+    h1, h2, p { margin: 0 0 12px; }
+    .card { background: #151b2d; border: 1px solid #2b354d; border-radius: 12px; padding: 16px; }
+    canvas { width: min(76vw, 640px); max-width: 100%; aspect-ratio: 1; background: white; image-rendering: pixelated; border: 1px solid #64748b; }
+    #messages { height: 420px; overflow: auto; font-size: 13px; line-height: 1.45; }
+    .message { border-bottom: 1px solid #283249; padding: 7px 0; }
+    button, input { font: inherit; }
+    button { background: #2563eb; color: white; border: 0; border-radius: 7px; padding: 8px 12px; cursor: pointer; }
+    #replay-controls { display: none; gap: 10px; align-items: center; margin-top: 12px; }
+    #timeline { flex: 1; }
+    .muted { color: #94a3b8; }
+    @media (max-width: 820px) { main { grid-template-columns: 1fr; } #messages { height: 220px; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <h1>Codrawing</h1>
+    <p>Target: <strong id="target">—</strong> · Turn <span id="turn">0</span>/<span id="max-turns">0</span></p>
+    <canvas id="canvas" width="24" height="24"></canvas>
+    <div id="replay-controls">
+      <button id="play">Pause</button>
+      <input id="timeline" type="range" min="0" max="0" value="0">
+    </div>
+    <p style="margin-top:12px"><button id="download">Download PNG</button> <span id="status" class="muted">Connecting…</span></p>
+  </section>
+  <aside class="card">
+    <h2>Public board</h2>
+    <div id="messages"></div>
+  </aside>
+</main>
+<script>
+  const canvas = document.querySelector('#canvas');
+  const ctx = canvas.getContext('2d');
+  const messages = document.querySelector('#messages');
+  const status = document.querySelector('#status');
+  const controls = document.querySelector('#replay-controls');
+  const timeline = document.querySelector('#timeline');
+  const playButton = document.querySelector('#play');
+  let frames = [], frameIndex = 0, playing = true, timer = null, seenMessages = [];
+
+  function draw(frame, messageList = null) {
+    canvas.width = frame.width;
+    canvas.height = frame.height;
+    frame.canvas.forEach((color, i) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(i % frame.width, Math.floor(i / frame.width), 1, 1);
+    });
+    document.querySelector('#target').textContent = frame.target;
+    document.querySelector('#turn').textContent = frame.turn;
+    document.querySelector('#max-turns').textContent = frame.max_turns;
+    if (messageList) seenMessages = messageList;
+    else if (frame.messages) seenMessages.push(...frame.messages);
+    messages.innerHTML = seenMessages.map(m =>
+      `<div class="message"><span class="muted">T${m.turn} · ${escapeHtml(m.player)}</span><br>${escapeHtml(m.text)}</div>`
+    ).join('');
+    messages.scrollTop = messages.scrollHeight;
+    status.textContent = frame.done ? 'Episode complete' : 'Live';
+  }
+
+  function escapeHtml(value) {
+    const node = document.createElement('div'); node.textContent = value; return node.innerHTML;
+  }
+
+  function showReplayFrame(index) {
+    frameIndex = Number(index);
+    const history = frames.slice(0, frameIndex + 1).flatMap(frame => frame.messages || []);
+    draw(frames[frameIndex], history);
+    timeline.value = frameIndex;
+  }
+
+  function startReplay() {
+    clearInterval(timer);
+    timer = setInterval(() => {
+      if (!playing || !frames.length) return;
+      showReplayFrame((frameIndex + 1) % frames.length);
+    }, 250);
+  }
+
+  const replayMode = location.pathname.endsWith('/replay');
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${location.host}/${replayMode ? 'replay' : 'global'}`);
+  socket.onopen = () => status.textContent = replayMode ? 'Loading replay…' : 'Live';
+  socket.onerror = () => status.textContent = 'Connection failed';
+  socket.onmessage = event => {
+    const payload = JSON.parse(event.data);
+    if (payload.type === 'replay') {
+      frames = payload.frames;
+      if (!frames.length) { status.textContent = 'Replay has no frames'; return; }
+      controls.style.display = 'flex';
+      timeline.max = frames.length - 1;
+      showReplayFrame(0);
+      startReplay();
+    } else draw(payload);
+  };
+
+  timeline.addEventListener('input', () => { playing = false; playButton.textContent = 'Play'; showReplayFrame(timeline.value); });
+  playButton.addEventListener('click', () => { playing = !playing; playButton.textContent = playing ? 'Pause' : 'Play'; });
+  document.querySelector('#download').addEventListener('click', () => {
+    const output = document.createElement('canvas'); output.width = canvas.width * 24; output.height = canvas.height * 24;
+    const outputContext = output.getContext('2d'); outputContext.imageSmoothingEnabled = false;
+    outputContext.drawImage(canvas, 0, 0, output.width, output.height);
+    const link = document.createElement('a'); link.download = `codrawing-${document.querySelector('#target').textContent}.png`;
+    link.href = output.toDataURL('image/png'); link.click();
+  });
+</script>
+</body>
+</html>

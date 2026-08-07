@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codrawing"
+version = "0.1.0"
+description = "Five-agent collaborative pixel-art Coworld MVP"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.5",
+  "uvicorn[standard]==0.34.2",
+  "websockets==15.0.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["codrawing"]

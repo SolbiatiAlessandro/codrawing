@@ -1,0 +1,6 @@
+services:
+  codrawing:
+    image: coworld-codrawing:latest
+    platform: linux/amd64
+    build:
+      context: .

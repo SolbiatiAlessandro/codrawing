@@ -1,0 +1,95 @@
+name: Coworld CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coworld-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  certify:
+    name: Build, run, and certify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COWORLD_VERSION: "0.1.35"
+      DOCKER_DEFAULT_PLATFORM: linux/amd64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.10.7"
+          python-version: "3.12"
+          enable-cache: true
+          prune-cache: true
+
+      - name: Install project and Coworld CLI
+        run: |
+          uv sync
+          uv tool install "coworld[auth]==${COWORLD_VERSION}"
+
+      - name: Run unit tests
+        run: uv run python -m unittest discover -s tests -v
+
+      - name: Point manifest documentation at this revision
+        run: >-
+          uv run python scripts/prepare_manifest.py
+          coworld_manifest_template.json
+          "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          "${GITHUB_SHA}"
+
+      - name: Check Docker
+        run: |
+          docker info
+          docker system df
+
+      - name: Build Coworld package
+        run: coworld build --project . --version 0.1.0
+
+      - name: Certify Coworld
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/certification
+          set +e
+          coworld certify dist/coworld_manifest.json \
+            --no-open-report \
+            --timeout-seconds 180 2>&1 | tee ci-artifacts/certification.log
+          certification_status=${PIPESTATUS[0]}
+          artifact_dir="$(sed -n 's/^Artifacts: //p' ci-artifacts/certification.log | tail -n 1)"
+          if [[ -n "${artifact_dir}" && -d "${artifact_dir}" ]]; then
+            cp -R "${artifact_dir}/." ci-artifacts/certification/
+          fi
+          exit "${certification_status}"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Codrawing Coworld"
+            echo
+            echo "- Unit tests, Docker build, replay-contract check, and Coworld certification run in this job."
+            echo "- The certification uses the required deterministic smoke-test player; it is not presented as a research image."
+            echo "- Download **codrawing-coworld-${GITHUB_RUN_ID}** below to inspect the manifest and certification report."
+            echo "- This workflow does not upload the Coworld to Softmax and uses no Softmax credentials."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload manifest and certification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codrawing-coworld-${{ github.run_id }}
+          path: |
+            ci-artifacts/
+            dist/coworld_manifest.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,185 @@
+name: Hosted five-LLM episode
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Bedrock Anthropic model ID used independently by all five agents
+        required: true
+        default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        type: string
+      turns:
+        description: Number of drawing turns
+        required: true
+        default: "50"
+        type: string
+      target:
+        description: Image target
+        required: true
+        default: cat
+        type: choice
+        options:
+          - cat
+          - dog
+          - elephant
+
+permissions:
+  contents: read
+
+jobs:
+  run-five-llms:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      COWORLD_VERSION: "0.1.35"
+      DOCKER_DEFAULT_PLATFORM: linux/amd64
+      SOFTMAX_TOKEN: ${{ secrets.SOFTMAX_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.10.7"
+          python-version: "3.12"
+          enable-cache: true
+          prune-cache: true
+
+      - name: Install project and Coworld CLI
+        run: |
+          uv sync
+          uv tool install "coworld[auth]==${COWORLD_VERSION}"
+
+      - name: Require Softmax credential
+        run: |
+          if [[ -z "${SOFTMAX_TOKEN}" ]]; then
+            echo "Repository secret SOFTMAX_TOKEN is required" >&2
+            exit 1
+          fi
+          softmax set-token "${SOFTMAX_TOKEN}"
+          softmax status
+
+      - name: Prepare and build Coworld
+        run: |
+          uv run python scripts/prepare_manifest.py \
+            coworld_manifest_template.json \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            "${GITHUB_SHA}"
+          coworld build --project . --version "0.1.${GITHUB_RUN_NUMBER}"
+          coworld certify dist/coworld_manifest.json --no-open-report --timeout-seconds 180
+
+      - name: Upload Coworld and strict LLM policy
+        id: upload
+        shell: bash
+        run: |
+          mkdir -p hosted-artifacts
+          coworld upload-coworld dist/coworld_manifest.json \
+            --wait-hosted-smoke \
+            --hosted-smoke-timeout-seconds 1800 2>&1 | tee hosted-artifacts/upload-coworld.log
+          coworld_id="$(sed -n 's/^Coworld: //p' hosted-artifacts/upload-coworld.log | tail -n 1)"
+          if [[ ! "${coworld_id}" =~ ^cow_ ]]; then
+            echo "Could not parse uploaded Coworld ID" >&2
+            exit 1
+          fi
+
+          policy_name="${GITHUB_ACTOR}-codrawing-llm-${GITHUB_RUN_ID}"
+          coworld upload-policy coworld-codrawing:latest \
+            --name "${policy_name}" \
+            --run python --run -m --run codrawing.player.llm_player \
+            --secret-env REQUIRE_LLM=true \
+            --use-bedrock \
+            --bedrock-model "${{ inputs.model }}" 2>&1 | tee hosted-artifacts/upload-policy.log
+          policy_ref="$(sed -n 's/^Upload complete: //p' hosted-artifacts/upload-policy.log | tail -n 1)"
+          if [[ -z "${policy_ref}" ]]; then
+            echo "Could not parse uploaded policy reference" >&2
+            exit 1
+          fi
+
+          echo "coworld_id=${coworld_id}" >> "${GITHUB_OUTPUT}"
+          echo "policy_ref=${policy_ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Request and wait for hosted LLM episode
+        id: hosted
+        shell: bash
+        run: |
+          uv run python scripts/create_xp_request.py \
+            "${{ steps.upload.outputs.coworld_id }}" \
+            "${{ steps.upload.outputs.policy_ref }}" \
+            hosted-artifacts/xp-request.json \
+            "${{ inputs.turns }}" \
+            "${{ inputs.target }}" \
+            "codrawing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          coworld xp-request create hosted-artifacts/xp-request.json --json \
+            | tee hosted-artifacts/xp-created.json
+          request_id="$(jq -r '.id' hosted-artifacts/xp-created.json)"
+
+          for _ in $(seq 1 120); do
+            coworld xp-request get "${request_id}" --json > hosted-artifacts/xp-status.json
+            status="$(jq -r '.status' hosted-artifacts/xp-status.json)"
+            echo "Experience Request ${request_id}: ${status}"
+            case "${status}" in
+              completed) break ;;
+              failed|cancelled)
+                jq . hosted-artifacts/xp-status.json
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+
+          if [[ "$(jq -r '.status' hosted-artifacts/xp-status.json)" != completed ]]; then
+            echo "Hosted episode did not complete before the workflow timeout" >&2
+            exit 1
+          fi
+
+          coworld xp-request episodes "${request_id}" --json > hosted-artifacts/episodes.json
+          episode_request_id="$(jq -r '.[0].id' hosted-artifacts/episodes.json)"
+          replay_url="$(jq -r '.[0].replay_url // empty' hosted-artifacts/episodes.json)"
+          if [[ -z "${episode_request_id}" || -z "${replay_url}" ]]; then
+            jq . hosted-artifacts/episodes.json
+            echo "Hosted episode has no replay" >&2
+            exit 1
+          fi
+
+          mkdir -p hosted-artifacts/logs
+          for slot in 0 1 2 3 4; do
+            coworld episode-logs "${episode_request_id}" \
+              --agent "${slot}" \
+              --output "hosted-artifacts/logs/agent-${slot}.log"
+          done
+          curl -fsSL "${replay_url}" -o hosted-artifacts/replay
+          uv run python scripts/verify_llm_logs.py hosted-artifacts/logs "${{ inputs.turns }}"
+          uv run python scripts/render_replay.py hosted-artifacts/replay hosted-artifacts/final-image.png
+
+          echo "request_id=${request_id}" >> "${GITHUB_OUTPUT}"
+          echo "episode_request_id=${episode_request_id}" >> "${GITHUB_OUTPUT}"
+          echo "replay_url=${replay_url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Five-LLM Codrawing episode"
+            echo
+            echo "- Model: \`${{ inputs.model }}\`"
+            echo "- Target: \`${{ inputs.target }}\`"
+            echo "- Turns: \`${{ inputs.turns }}\` per agent"
+            echo "- Experience Request: \`${{ steps.hosted.outputs.request_id }}\`"
+            echo "- Episode Request: \`${{ steps.hosted.outputs.episode_request_id }}\`"
+            echo "- The job verifies exactly five agent logs and one successful LLM response per agent per turn; deterministic fallback is disabled."
+            if [[ -n "${{ steps.hosted.outputs.replay_url }}" ]]; then
+              echo "- [Open hosted replay](${{ steps.hosted.outputs.replay_url }})"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload LLM image, replay, metadata, and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: five-llm-codrawing-${{ github.run_id }}
+          path: hosted-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

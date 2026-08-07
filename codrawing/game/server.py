@@ -1,0 +1,296 @@
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager, suppress
+import gzip
+import json
+import os
+from pathlib import Path
+import secrets
+from typing import Any, Literal, cast
+from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
+import zlib
+
+import uvicorn
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import HTMLResponse
+
+from codrawing.game.engine import PixelArtEngine, choose_target
+
+
+CLIENT_DIR = Path(__file__).parent / "client"
+GAME_HOST = os.environ.get("COGAME_HOST", "0.0.0.0")
+GAME_PORT = int(os.environ.get("COGAME_PORT", "8080"))
+HTTP_USER_AGENT = "codrawing/0.1"
+
+
+def read_data(uri: str) -> bytes:
+    parsed = urlparse(uri)
+    if parsed.scheme in ("http", "https"):
+        with urlopen(Request(uri, headers={"User-Agent": HTTP_USER_AGENT}), timeout=30) as response:
+            return response.read()
+    if parsed.scheme == "file":
+        return Path(unquote(parsed.path)).read_bytes()
+    if parsed.scheme == "":
+        return Path(uri).read_bytes()
+    raise ValueError(f"unsupported URI: {uri}")
+
+
+def write_data(
+    uri: str,
+    data: bytes | str,
+    *,
+    content_type: str,
+    http_method: Literal["POST", "PUT"],
+) -> None:
+    payload = data.encode() if isinstance(data, str) else data
+    parsed = urlparse(uri)
+    if parsed.scheme in ("http", "https"):
+        request = Request(uri, data=payload, method=http_method)
+        request.add_header("Content-Type", content_type)
+        request.add_header("User-Agent", HTTP_USER_AGENT)
+        with urlopen(request, timeout=60):
+            return
+    path = Path(unquote(parsed.path)) if parsed.scheme == "file" else Path(uri)
+    if parsed.scheme not in ("file", ""):
+        raise ValueError(f"unsupported URI: {uri}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+
+
+def artifact_method(env_var: str) -> Literal["POST", "PUT"]:
+    method = os.environ.get(env_var, "PUT").upper()
+    if method not in {"POST", "PUT"}:
+        raise ValueError(f"{env_var} must be PUT or POST")
+    return cast(Literal["POST", "PUT"], method)
+
+
+def load_replay(uri: str) -> dict[str, Any]:
+    data = read_data(uri)
+    if uri.endswith(".z"):
+        data = zlib.decompress(data)
+    elif uri.endswith(".gz"):
+        data = gzip.decompress(data)
+    return cast(dict[str, Any], json.loads(data))
+
+
+REPLAY_MODE = "COGAME_LOAD_REPLAY_URI" in os.environ
+REPLAY_LOAD_URI = os.environ.get("COGAME_LOAD_REPLAY_URI", "")
+
+if REPLAY_MODE:
+    CONFIG: dict[str, Any] = {"tokens": [], "players": []}
+    RESULTS_URI = ""
+    REPLAY_SAVE_URI = ""
+else:
+    CONFIG = json.loads(read_data(os.environ["COGAME_CONFIG_URI"]))
+    RESULTS_URI = os.environ["COGAME_RESULTS_URI"]
+    REPLAY_SAVE_URI = os.environ["COGAME_SAVE_REPLAY_URI"]
+
+
+TOKENS = CONFIG.get("tokens", [])
+PLAYER_NAMES = [player["name"] for player in CONFIG.get("players", [])]
+CONNECT_TIMEOUT = float(CONFIG.get("player_connect_timeout_seconds", 30))
+ACTION_TIMEOUT = float(CONFIG.get("action_timeout_seconds", 15))
+
+
+class GameRuntime:
+    def __init__(self) -> None:
+        self.players: dict[int, WebSocket] = {}
+        self.global_viewers: set[WebSocket] = set()
+        self.pending_actions: dict[int, dict[str, Any]] = {}
+        self.action_event = asyncio.Event()
+        self.started = False
+        self.finished = False
+        self.frames: list[dict[str, Any]] = []
+        episode_seed = CONFIG.get("seed")
+        if TOKENS and episode_seed is None:
+            episode_seed = secrets.randbits(63)
+            CONFIG["seed"] = episode_seed
+        self.engine = (
+            PixelArtEngine(
+                width=int(CONFIG["width"]),
+                height=int(CONFIG["height"]),
+                max_turns=int(CONFIG["max_turns"]),
+                target=choose_target(CONFIG["targets"], episode_seed),
+                player_names=PLAYER_NAMES,
+            )
+            if TOKENS
+            else None
+        )
+
+
+runtime = GameRuntime()
+server: uvicorn.Server
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    timeout_task = asyncio.create_task(_start_after_connect_timeout()) if TOKENS else None
+    yield
+    if timeout_task is not None:
+        timeout_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await timeout_task
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, bool]:
+    return {"ok": True}
+
+
+def client(name: str) -> HTMLResponse:
+    return HTMLResponse((CLIENT_DIR / name).read_text())
+
+
+@app.get("/client/global")
+def global_client() -> HTMLResponse:
+    return client("viewer.html")
+
+
+@app.get("/client/replay")
+def replay_client() -> HTMLResponse:
+    return client("viewer.html")
+
+
+@app.get("/client/player")
+def player_client() -> HTMLResponse:
+    return client("player.html")
+
+
+@app.websocket("/global")
+async def global_viewer(websocket: WebSocket) -> None:
+    await websocket.accept()
+    runtime.global_viewers.add(websocket)
+    try:
+        if runtime.engine is not None:
+            await websocket.send_json(runtime.engine.snapshot())
+        async for _ in websocket.iter_json():
+            pass
+    finally:
+        runtime.global_viewers.discard(websocket)
+
+
+@app.websocket("/replay")
+async def replay_viewer(websocket: WebSocket) -> None:
+    await websocket.accept()
+    await websocket.send_json({"type": "replay", **load_replay(REPLAY_LOAD_URI)})
+    async for _ in websocket.iter_json():
+        pass
+
+
+@app.websocket("/player")
+async def player(websocket: WebSocket) -> None:
+    slot = int(websocket.query_params.get("slot", "-1"))
+    token = websocket.query_params.get("token", "")
+    if slot < 0 or slot >= len(TOKENS) or token != TOKENS[slot]:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    runtime.players[slot] = websocket
+    await websocket.send_json({"type": "welcome", "slot": slot, "players": PLAYER_NAMES})
+    if len(runtime.players) == len(TOKENS) and not runtime.started:
+        runtime.started = True
+        asyncio.create_task(_play_game())
+
+    try:
+        async for raw in websocket.iter_json():
+            engine = runtime.engine
+            if engine is None or runtime.finished:
+                continue
+            if raw.get("turn") != engine.turn or slot in runtime.pending_actions:
+                continue
+            runtime.pending_actions[slot] = raw
+            if len(runtime.pending_actions) == len(TOKENS):
+                runtime.action_event.set()
+    finally:
+        if runtime.players.get(slot) is websocket:
+            del runtime.players[slot]
+
+
+async def _start_after_connect_timeout() -> None:
+    await asyncio.sleep(CONNECT_TIMEOUT)
+    if not runtime.started and not runtime.finished:
+        runtime.started = True
+        asyncio.create_task(_play_game())
+
+
+async def _play_game() -> None:
+    assert runtime.engine is not None
+    engine = runtime.engine
+    await asyncio.sleep(0.2)
+    while not engine.done:
+        runtime.pending_actions = {}
+        runtime.action_event.clear()
+        await _broadcast_players()
+        try:
+            await asyncio.wait_for(runtime.action_event.wait(), timeout=ACTION_TIMEOUT)
+        except TimeoutError:
+            pass
+
+        resolution = engine.resolve(runtime.pending_actions)
+        snapshot = engine.snapshot(turn_messages=resolution["messages"])
+        snapshot["accepted_slots"] = resolution["accepted_slots"]
+        snapshot["collision_slots"] = resolution["collision_slots"]
+        runtime.frames.append(snapshot)
+        await _broadcast_globals(snapshot)
+
+    results = engine.results()
+    replay = {"config": CONFIG, "frames": runtime.frames, "results": results}
+    write_data(
+        RESULTS_URI,
+        json.dumps(results),
+        content_type="application/json",
+        http_method=artifact_method("COGAME_RESULTS_METHOD"),
+    )
+    write_data(
+        REPLAY_SAVE_URI,
+        json.dumps(replay),
+        content_type="application/json",
+        http_method=artifact_method("COGAME_SAVE_REPLAY_METHOD"),
+    )
+    runtime.finished = True
+    await _broadcast_players(final=True)
+    await asyncio.sleep(0.5)
+    server.should_exit = True
+
+
+async def _broadcast_players(*, final: bool = False) -> None:
+    assert runtime.engine is not None
+    engine = runtime.engine
+    stale: list[int] = []
+    for slot, websocket in list(runtime.players.items()):
+        payload = engine.snapshot()
+        payload.update(
+            {
+                "type": "final" if final else "observation",
+                "slot": slot,
+                "recent_messages": engine.messages[-25:],
+            }
+        )
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            stale.append(slot)
+    for slot in stale:
+        runtime.players.pop(slot, None)
+
+
+async def _broadcast_globals(snapshot: dict[str, Any]) -> None:
+    stale: list[WebSocket] = []
+    for websocket in list(runtime.global_viewers):
+        try:
+            await websocket.send_json(snapshot)
+        except Exception:
+            stale.append(websocket)
+    for websocket in stale:
+        runtime.global_viewers.discard(websocket)
+
+
+if __name__ == "__main__":
+    server = uvicorn.Server(uvicorn.Config(app, host=GAME_HOST, port=GAME_PORT))
+    server.run()

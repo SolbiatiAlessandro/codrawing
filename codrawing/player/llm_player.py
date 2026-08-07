@@ -54,9 +54,21 @@ Recent public board:
 {messages}
 
 Coordinate with the other artists and improve the recognizable image. Choose exactly one pixel and a short public
-message. Return JSON only, with this exact shape:
-{{"message":"...","paint":{{"x":0,"y":0,"color":"#RRGGBB"}}}}
+message. Call the paint_pixel tool exactly once and do not add prose.
 """
+
+
+def extract_model_output(payload: dict[str, Any]) -> str:
+    for block in payload.get("content", []):
+        if block.get("type") == "tool_use" and block.get("name") == "paint_pixel":
+            tool_input = block.get("input")
+            if isinstance(tool_input, dict):
+                return json.dumps(tool_input)
+    return "".join(
+        block.get("text", "")
+        for block in payload.get("content", [])
+        if block.get("type") == "text"
+    )
 
 
 def call_model(prompt: str) -> str:
@@ -64,9 +76,34 @@ def call_model(prompt: str) -> str:
     model = os.environ["BEDROCK_MODEL"] if sidecar else os.environ["ANTHROPIC_MODEL"]
     request_body: dict[str, Any] = {
         "model": model,
-        "max_tokens": 180,
-        "temperature": 0.4,
+        "max_tokens": 512,
+        "temperature": 0.2,
         "messages": [{"role": "user", "content": prompt}],
+        "tools": [
+            {
+                "name": "paint_pixel",
+                "description": "Post one public coordination message and paint one canvas pixel.",
+                "input_schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["message", "paint"],
+                    "properties": {
+                        "message": {"type": "string", "maxLength": 240},
+                        "paint": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["x", "y", "color"],
+                            "properties": {
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "color": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            }
+        ],
+        "tool_choice": {"type": "tool", "name": "paint_pixel"},
     }
     if sidecar:
         request_body.pop("model")
@@ -84,7 +121,7 @@ def call_model(prompt: str) -> str:
     request = Request(url, data=body, headers=headers, method="POST")
     with urlopen(request, timeout=float(os.environ.get("MODEL_TIMEOUT_SECONDS", "10"))) as response:
         payload = json.loads(response.read())
-    return "".join(block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text")
+    return extract_model_output(payload)
 
 
 def fallback_action(observation: dict[str, Any], slot: int) -> dict[str, Any]:

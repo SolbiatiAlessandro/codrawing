@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 
 from codrawing.game.engine import PixelArtEngine, choose_target
-from codrawing.player.llm_player import SEAT_COLORS, SEAT_ROLES, extract_action, prompt_for
+from codrawing.player.llm_player import (
+    SEAT_COLORS,
+    SEAT_ROLES,
+    extract_action,
+    extract_model_output,
+    prompt_for,
+)
 from codrawing.player.pixel_templates import make_template
 
 
@@ -71,6 +77,20 @@ class TemplateTest(unittest.TestCase):
         plain = '{"message":"left ear","paint":{"x":2,"y":3,"color":"#112233"}}'
         self.assertEqual(extract_action(plain)["paint"]["x"], 2)
         self.assertEqual(extract_action(f"```json\n{plain}\n```")["message"], "left ear")
+
+    def test_llm_tool_input_is_used_as_structured_output(self) -> None:
+        payload = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "paint_pixel",
+                    "input": {"message": "outline", "paint": {"x": 1, "y": 2, "color": "#000000"}},
+                }
+            ]
+        }
+        decision = extract_action(extract_model_output(payload))
+        self.assertEqual(decision["message"], "outline")
+        self.assertEqual(decision["paint"]["y"], 2)
 
     def test_llm_prompt_assigns_a_distinct_color_to_each_seat(self) -> None:
         observation = {

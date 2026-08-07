@@ -149,8 +149,7 @@ jobs:
           mkdir -p hosted-artifacts/logs
           for slot in 0 1 2 3 4; do
             coworld episode-logs "${episode_request_id}" \
-              --agent "${slot}" \
-              --output "hosted-artifacts/logs/agent-${slot}.log"
+              --agent "${slot}" > "hosted-artifacts/logs/agent-${slot}.log"
           done
           curl -fsSL "${replay_url}" -o hosted-artifacts/replay
           uv run python scripts/verify_llm_logs.py hosted-artifacts/logs "${{ inputs.turns }}"

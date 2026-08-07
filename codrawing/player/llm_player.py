@@ -13,6 +13,13 @@ import websockets
 from codrawing.player.pixel_templates import make_template
 
 SEAT_COLORS = ("#EF4444", "#3B82F6", "#22C55E", "#F59E0B", "#A855F7")
+SEAT_ROLES = (
+    "silhouette and outer contour",
+    "head and facial features",
+    "body, legs, and grounding",
+    "ears, tail, and distinctive details",
+    "fill gaps and improve overall readability",
+)
 
 
 def extract_action(text: str) -> dict[str, Any]:
@@ -40,6 +47,7 @@ Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.
 Turn: {observation['turn']} of {observation['max_turns']}.
 Your assigned paint color is {SEAT_COLORS[slot]}; always use exactly this color.
+Your specialization is {SEAT_ROLES[slot]}. Prefer that responsibility and avoid coordinates announced by others.
 Painted pixels as x,y:#RRGGBB (all omitted pixels are white):
 {'; '.join(painted) if painted else '(blank canvas)'}
 Recent public board:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from codrawing.game.engine import PixelArtEngine, choose_target
-from codrawing.player.llm_player import SEAT_COLORS, extract_action, prompt_for
+from codrawing.player.llm_player import SEAT_COLORS, SEAT_ROLES, extract_action, prompt_for
 from codrawing.player.pixel_templates import make_template
 
 
@@ -83,11 +83,13 @@ class TemplateTest(unittest.TestCase):
             "max_turns": 50,
         }
         self.assertEqual(len(set(SEAT_COLORS)), 5)
+        self.assertEqual(len(set(SEAT_ROLES)), 5)
         for slot in range(5):
             self.assertIn(
                 f"assigned paint color is {SEAT_COLORS[slot]}",
                 prompt_for(observation, slot),
             )
+            self.assertIn(f"specialization is {SEAT_ROLES[slot]}", prompt_for(observation, slot))
 
 
 if __name__ == "__main__":

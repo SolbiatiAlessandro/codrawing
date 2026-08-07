@@ -12,6 +12,8 @@ import websockets
 
 from codrawing.player.pixel_templates import make_template
 
+SEAT_COLORS = ("#EF4444", "#3B82F6", "#22C55E", "#F59E0B", "#A855F7")
+
 
 def extract_action(text: str) -> dict[str, Any]:
     """Extract the first JSON object from a model response."""
@@ -37,6 +39,7 @@ def prompt_for(observation: dict[str, Any], slot: int) -> str:
 Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.
 Turn: {observation['turn']} of {observation['max_turns']}.
+Your assigned paint color is {SEAT_COLORS[slot]}; always use exactly this color.
 Painted pixels as x,y:#RRGGBB (all omitted pixels are white):
 {'; '.join(painted) if painted else '(blank canvas)'}
 Recent public board:
@@ -121,6 +124,8 @@ async def main() -> None:
                 try:
                     action = await asyncio.to_thread(call_model, prompt_for(observation, slot))
                     decision = extract_action(action)
+                    if isinstance(decision.get("paint"), dict):
+                        decision["paint"]["color"] = SEAT_COLORS[slot]
                     validate_decision(decision, observation)
                     break
                 except Exception as exc:

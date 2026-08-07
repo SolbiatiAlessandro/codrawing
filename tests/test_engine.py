@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from codrawing.game.engine import PixelArtEngine, choose_target
-from codrawing.player.llm_player import extract_action
+from codrawing.player.llm_player import SEAT_COLORS, extract_action, prompt_for
 from codrawing.player.pixel_templates import make_template
 
 
@@ -71,6 +71,23 @@ class TemplateTest(unittest.TestCase):
         plain = '{"message":"left ear","paint":{"x":2,"y":3,"color":"#112233"}}'
         self.assertEqual(extract_action(plain)["paint"]["x"], 2)
         self.assertEqual(extract_action(f"```json\n{plain}\n```")["message"], "left ear")
+
+    def test_llm_prompt_assigns_a_distinct_color_to_each_seat(self) -> None:
+        observation = {
+            "width": 8,
+            "height": 8,
+            "canvas": ["#FFFFFF"] * 64,
+            "recent_messages": [],
+            "target": "cat",
+            "turn": 0,
+            "max_turns": 50,
+        }
+        self.assertEqual(len(set(SEAT_COLORS)), 5)
+        for slot in range(5):
+            self.assertIn(
+                f"assigned paint color is {SEAT_COLORS[slot]}",
+                prompt_for(observation, slot),
+            )
 
 
 if __name__ == "__main__":

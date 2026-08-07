@@ -100,6 +100,10 @@ class GameRuntime:
         self.players: dict[int, WebSocket] = {}
         self.global_viewers: set[WebSocket] = set()
         self.pending_actions: dict[int, dict[str, Any]] = {}
+        self.last_resolution: dict[str, Any] = {
+            "accepted_slots": [],
+            "collision_slots": [],
+        }
         self.action_event = asyncio.Event()
         self.started = False
         self.finished = False
@@ -270,6 +274,7 @@ async def _play_game() -> None:
             pass
 
         resolution = engine.resolve(runtime.pending_actions)
+        runtime.last_resolution = resolution
         runtime.score_canvas()
         snapshot = runtime.snapshot(turn_messages=resolution["messages"])
         snapshot["accepted_slots"] = resolution["accepted_slots"]
@@ -316,6 +321,8 @@ async def _broadcast_players(*, final: bool = False) -> None:
                 "type": "final" if final else "observation",
                 "slot": slot,
                 "recent_messages": engine.messages[-25:],
+                "previous_accepted_slots": runtime.last_resolution["accepted_slots"],
+                "previous_collision_slots": runtime.last_resolution["collision_slots"],
             }
         )
         try:

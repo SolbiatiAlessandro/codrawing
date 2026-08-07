@@ -24,6 +24,7 @@ def create(
         "game_config_overrides": {
             "max_turns": turns,
             "targets": [target],
+            "player_connect_timeout_seconds": 120,
             "action_timeout_seconds": 15,
         },
         "roster": [

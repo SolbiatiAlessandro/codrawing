@@ -54,6 +54,10 @@ class WorkflowHelpersTest(unittest.TestCase):
             self.assertEqual([seat["slot"] for seat in request["roster"]], [0, 1, 2, 3, 4])
             self.assertEqual({seat["player"]["policy_ref"] for seat in request["roster"]}, {"artist:v1"})
             self.assertEqual(request["game_config_overrides"]["max_turns"], 50)
+            self.assertEqual(
+                request["game_config_overrides"]["player_connect_timeout_seconds"],
+                120,
+            )
 
     def test_strict_log_check_requires_every_agent_and_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

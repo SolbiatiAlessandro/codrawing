@@ -155,7 +155,7 @@ async def main() -> None:
                         f"{max_attempts} attempts: {model_error}",
                         flush=True,
                     )
-                    raise model_error
+                    continue
                 print(f"model call failed; using deterministic fallback: {model_error}", flush=True)
                 decision = fallback_action(observation, slot)
             else:

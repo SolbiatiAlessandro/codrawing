@@ -88,7 +88,9 @@
 
   const replayMode = location.pathname.endsWith('/replay');
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${location.host}/${replayMode ? 'replay' : 'global'}`);
+  const suppliedAddress = new URLSearchParams(location.search).get('address');
+  const defaultAddress = `${protocol}//${location.host}/${replayMode ? 'replay' : 'global'}`;
+  const socket = new WebSocket(suppliedAddress || defaultAddress);
   socket.onopen = () => status.textContent = replayMode ? 'Loading replay…' : 'Live';
   socket.onerror = () => status.textContent = 'Connection failed';
   socket.onmessage = event => {

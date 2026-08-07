@@ -39,6 +39,8 @@ Each ordinary CI run uploads a 14-day artifact containing the hydrated manifest 
 
 The separate manual `Hosted five-LLM episode` workflow builds and uploads the Coworld, uploads the LLM player with hosted Bedrock access, and requests one episode with five independent player containers. It requires a `SOFTMAX_TOKEN` repository secret. Deterministic fallback is disabled for this run, and the workflow checks all five player logs for one successful model response per requested turn before rendering `final-image.png`.
 
+See [hosted five-LLM trials](docs/trials.md) for completed cat, dog, and elephant episodes with Actions evidence and replay links.
+
 ## Local tests without Docker
 
 ```bash

@@ -17,7 +17,7 @@
         "-m",
         "codrawing.game.server"
       ],
-      "source_url": "https://github.com/SolbiatiAlessandro/codrawing/tree/test"
+      "source_url": "https://github.com/SolbiatiAlessandro/codrawing"
     },
     "config_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -156,17 +156,17 @@
     "protocols": {
       "player": {
         "type": "uri",
-        "value": "https://github.com/SolbiatiAlessandro/codrawing/blob/test/docs/player-protocol.md"
+        "value": "https://github.com/SolbiatiAlessandro/codrawing/blob/main/docs/player-protocol.md"
       },
       "global": {
         "type": "uri",
-        "value": "https://github.com/SolbiatiAlessandro/codrawing/blob/test/docs/global-protocol.md"
+        "value": "https://github.com/SolbiatiAlessandro/codrawing/blob/main/docs/global-protocol.md"
       }
     },
     "docs": {
       "readme": {
         "type": "uri",
-        "value": "https://github.com/SolbiatiAlessandro/codrawing/blob/test/README.md"
+        "value": "https://github.com/SolbiatiAlessandro/codrawing/blob/main/README.md"
       }
     }
   },
@@ -181,7 +181,7 @@
         "-m",
         "codrawing.player.template_player"
       ],
-      "source_url": "https://github.com/SolbiatiAlessandro/codrawing/tree/test/codrawing/player",
+      "source_url": "https://github.com/SolbiatiAlessandro/codrawing/tree/main/codrawing/player",
       "description": "Deterministic no-LLM baseline that divides a small target template across the five seats."
     }
   ],

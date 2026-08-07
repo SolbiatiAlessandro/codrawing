@@ -100,7 +100,8 @@ def validate_decision(decision: dict[str, Any], observation: dict[str, Any]) -> 
 async def main() -> None:
     url = os.environ["COWORLD_PLAYER_WS_URL"]
     require_llm = os.environ.get("REQUIRE_LLM", "").lower() in {"1", "true", "yes"}
-    max_attempts = int(os.environ.get("MODEL_MAX_ATTEMPTS", "5" if require_llm else "1"))
+    max_attempts = int(os.environ.get("MODEL_MAX_ATTEMPTS", "4" if require_llm else "1"))
+    stagger_seconds = float(os.environ.get("MODEL_STAGGER_SECONDS", "3" if require_llm else "0"))
     async with websockets.connect(url) as websocket:
         slot: int | None = None
         async for raw_message in websocket:
@@ -112,6 +113,8 @@ async def main() -> None:
                 return
             if observation["type"] != "observation" or slot is None:
                 continue
+            if stagger_seconds:
+                await asyncio.sleep(slot * stagger_seconds)
             decision: dict[str, Any] | None = None
             model_error: Exception | None = None
             for attempt in range(max_attempts):

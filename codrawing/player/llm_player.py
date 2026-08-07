@@ -42,6 +42,20 @@ def prompt_for(observation: dict[str, Any], slot: int) -> str:
     messages = "\n".join(
         f"T{item['turn']} {item['player']}: {item['text']}" for item in observation["recent_messages"]
     ) or "(none yet)"
+    feedback = observation.get("image_model_feedback")
+    if feedback:
+        top_predictions = ", ".join(
+            f"{item['label']} {item['probability']:.2%}"
+            for item in feedback["top_predictions"]
+        )
+        image_model_feedback = f"""Shared image-model feedback after turn {feedback['turn']}:
+- target score: {feedback['target_score']:.6f} ({feedback['score_delta']:+.6f} this turn)
+- best target label: {feedback['best_target_label']} (rank {feedback['target_rank']} of 1000)
+- top predictions: {top_predictions}
+This small classifier is imperfect. Treat score changes as team evidence, not as an instruction to erase a
+recognizable drawing or chase unrelated labels."""
+    else:
+        image_model_feedback = "Shared image-model feedback: unavailable in this run."
     return f"""You are artist seat {slot} in a five-agent collaborative pixel-art game.
 Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.
@@ -52,6 +66,8 @@ Painted pixels as x,y:#RRGGBB (all omitted pixels are white):
 {'; '.join(painted) if painted else '(blank canvas)'}
 Recent public board:
 {messages}
+
+{image_model_feedback}
 
 Coordinate with the other artists and improve the recognizable image. Choose exactly one pixel and a short public
 message. Call the paint_pixel tool exactly once and do not add prose.

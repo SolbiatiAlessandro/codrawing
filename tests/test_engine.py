@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from codrawing.game.engine import PixelArtEngine, choose_target
+from codrawing.game.image_model import MODEL_NAME, TARGET_INDICES
 from codrawing.player.llm_player import (
     SEAT_COLORS,
     SEAT_ROLES,
@@ -110,6 +111,38 @@ class TemplateTest(unittest.TestCase):
                 prompt_for(observation, slot),
             )
             self.assertIn(f"specialization is {SEAT_ROLES[slot]}", prompt_for(observation, slot))
+
+    def test_llm_prompt_includes_shared_image_model_feedback(self) -> None:
+        observation = {
+            "width": 8,
+            "height": 8,
+            "canvas": ["#FFFFFF"] * 64,
+            "recent_messages": [],
+            "target": "cat",
+            "turn": 2,
+            "max_turns": 50,
+            "image_model_feedback": {
+                "model": MODEL_NAME,
+                "turn": 2,
+                "target_score": 0.012345,
+                "score_delta": 0.001,
+                "target_rank": 17,
+                "best_target_label": "tabby",
+                "top_predictions": [
+                    {"label": "comic book", "probability": 0.12},
+                    {"label": "tabby", "probability": 0.01},
+                ],
+            },
+        }
+        prompt = prompt_for(observation, 0)
+        self.assertIn("target score: 0.012345 (+0.001000 this turn)", prompt)
+        self.assertIn("best target label: tabby (rank 17 of 1000)", prompt)
+        self.assertIn("comic book 12.00%", prompt)
+
+    def test_image_model_target_groups_use_expected_imagenet_classes(self) -> None:
+        self.assertEqual(TARGET_INDICES["cat"], tuple(range(281, 286)))
+        self.assertEqual(len(TARGET_INDICES["dog"]), 118)
+        self.assertEqual(TARGET_INDICES["elephant"], (101, 385, 386))
 
 
 if __name__ == "__main__":

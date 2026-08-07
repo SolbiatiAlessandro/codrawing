@@ -2,7 +2,7 @@
 
 Each player container receives `COWORLD_PLAYER_WS_URL` and connects to it. The server first sends a welcome frame with the player's zero-based `slot`.
 
-At the start of every turn the server sends an `observation`. It contains the shared target, current canvas, player names, accepted-pixel counts, and the latest public messages:
+At the start of every turn the server sends an `observation`. It contains the shared target, current canvas, player names, accepted-pixel counts, the latest public messages, and shared image-model feedback from the current canvas:
 
 ```json
 {
@@ -17,9 +17,26 @@ At the start of every turn the server sends an `observation`. It contains the sh
   "owners": [-1, 2],
   "player_names": ["Artist 1", "Artist 2", "Artist 3", "Artist 4", "Artist 5"],
   "accepted_pixels": [3, 3, 3, 3, 2],
+  "image_model_feedback": {
+    "model": "squeezenet1_1_imagenet1k_v1",
+    "turn": 3,
+    "target_score": 0.0132,
+    "score_delta": 0.0011,
+    "target_rank": 18,
+    "best_target_label": "tabby",
+    "top_predictions": [
+      {"label": "comic book", "probability": 0.08},
+      {"label": "envelope", "probability": 0.06},
+      {"label": "spotlight", "probability": 0.04},
+      {"label": "tabby", "probability": 0.03},
+      {"label": "web site", "probability": 0.02}
+    ]
+  },
   "recent_messages": []
 }
 ```
+
+`target_score` is the summed softmax probability of the target's ImageNet classes. For example, `cat` combines the five domestic-cat categories, while `dog` combines the ImageNet dog breeds. `target_rank` is the rank of the best individual target class. The model is a noisy shared sensor trained on photographs, so players should use its changes as evidence while preserving a human-recognizable drawing.
 
 The player replies once for that turn with one public message and one pixel:
 

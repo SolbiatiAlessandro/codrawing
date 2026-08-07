@@ -1,8 +1,8 @@
 # Codrawing
 
-Codrawing is a minimal five-agent Coworld for collaborative pixel art. Every turn, each player sends one public message and chooses one pixel and color. All actions resolve at once. The shared target is randomly selected from `cat`, `dog`, and `elephant`; a human judges the finished image in the replay viewer.
+Codrawing is a minimal five-agent Coworld for collaborative pixel art. Every turn, each player sends one public message and chooses one pixel and color. All actions resolve at once. The shared target is randomly selected from `cat`, `dog`, and `elephant`; a human can judge the finished image in the replay viewer.
 
-This first version deliberately has no image grader. Its Coworld `scores` are all zero, so they do not pretend that activity equals image quality. The replay and PNG are the result.
+After every simultaneous turn, a frozen SqueezeNet 1.1 ImageNet classifier scores the rendered canvas. All five agents receive the same target score, score delta, best target-category rank, and top five predictions in their next observation. The final team score is copied to each Coworld player score. This is an intentionally small experimental signal, not a substitute for human judgment: ImageNet is trained on photographs and can be gamed by pixel patterns.
 
 ## Rules
 
@@ -15,6 +15,8 @@ This first version deliberately has no image grader. Its Coworld `scores` are al
 The bundled `Template Team Player` is a deterministic smoke-test policy, not an LLM. Five copies divide a small target template among themselves, proving that simultaneous actions, artifacts, and replay rendering work. In a hosted episode, LLM policy images can replace those five bundled players without changing the game.
 
 The same image also contains `python -m codrawing.player.llm_player`. It calls Anthropic models through Coworld's hosted Bedrock sidecar and makes one bounded call per turn. Each seat has a distinct fixed color and a different compositional role so a human can see who contributed each pixel and the agents are less likely to collide; coordinates and messages still come from the model. Normal development runs fall back to the deterministic template on errors or throttling. Set `REQUIRE_LLM=true` for evidence runs: an exhausted model call skips the action instead of falling back, and the player emits one structured `llm_action` log record for every successful model turn. The workflow rejects any run without every required record. Upload it as a policy with `--run python --run -m --run codrawing.player.llm_player --use-bedrock --bedrock-model <model-id>`. For a local direct Anthropic run, inject `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` as secret environment variables. The game never receives those secrets.
+
+SqueezeNet has a 4.7 MB checkpoint and runs in the game container through ONNX Runtime. The Docker builder temporarily uses TorchVision to export the official pretrained weights, but PyTorch is not present in the final image. Model downloads and heavy build layers therefore stay on the ephemeral GitHub runner; nothing is downloaded into the laptop workspace. The Docker context also excludes `.venv`, `runs`, and `dist`.
 
 ## Coworld workflow
 
@@ -33,7 +35,7 @@ Before a hosted upload, publish this folder at `https://github.com/SolbiatiAless
 
 ## GitHub Actions
 
-The `Coworld CI` workflow runs on every push, pull request, and manual dispatch using an `ubuntu-24.04` x86 runner. It runs unit tests, builds the Docker image and hydrated manifest, completes a 50-turn episode with five separate baseline-player containers, verifies replay mode, renders the final canvas to PNG, and runs `coworld certify`.
+The `Coworld CI` workflow runs on every push, pull request, and manual dispatch using an `ubuntu-24.04` x86 runner. It runs unit tests, builds the Docker image and hydrated manifest, and runs `coworld certify` with five separate baseline-player containers.
 
 Each ordinary CI run uploads a 14-day artifact containing the hydrated manifest and certification transcript. It deliberately does not upload the Coworld to Softmax and requires no secrets.
 

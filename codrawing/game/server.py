@@ -17,6 +17,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
 from codrawing.game.engine import PixelArtEngine, choose_target
+from codrawing.game.image_model import ImageModelScorer, scorer_from_environment
 
 
 CLIENT_DIR = Path(__file__).parent / "client"
@@ -103,6 +104,9 @@ class GameRuntime:
         self.started = False
         self.finished = False
         self.frames: list[dict[str, Any]] = []
+        self.image_model: ImageModelScorer | None = scorer_from_environment() if TOKENS else None
+        self.image_model_feedback: dict[str, Any] | None = None
+        self.image_model_score_trace: list[dict[str, Any]] = []
         episode_seed = CONFIG.get("seed")
         if TOKENS and episode_seed is None:
             episode_seed = secrets.randbits(63)
@@ -118,6 +122,39 @@ class GameRuntime:
             if TOKENS
             else None
         )
+        if self.engine is not None and self.image_model is not None:
+            self.image_model_feedback = self._score_canvas()
+            self.image_model_score_trace.append(self.image_model_feedback)
+
+    def _score_canvas(self) -> dict[str, Any]:
+        assert self.engine is not None
+        assert self.image_model is not None
+        previous_score = (
+            float(self.image_model_feedback["target_score"])
+            if self.image_model_feedback is not None
+            else None
+        )
+        return self.image_model.score(
+            canvas=self.engine.canvas,
+            width=self.engine.width,
+            height=self.engine.height,
+            target=self.engine.target,
+            turn=self.engine.turn,
+            previous_score=previous_score,
+        )
+
+    def score_canvas(self) -> None:
+        if self.image_model is None:
+            return
+        self.image_model_feedback = self._score_canvas()
+        self.image_model_score_trace.append(self.image_model_feedback)
+
+    def snapshot(self, *, turn_messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        assert self.engine is not None
+        snapshot = self.engine.snapshot(turn_messages=turn_messages)
+        if self.image_model_feedback is not None:
+            snapshot["image_model_feedback"] = self.image_model_feedback.copy()
+        return snapshot
 
 
 runtime = GameRuntime()
@@ -167,7 +204,7 @@ async def global_viewer(websocket: WebSocket) -> None:
     runtime.global_viewers.add(websocket)
     try:
         if runtime.engine is not None:
-            await websocket.send_json(runtime.engine.snapshot())
+            await websocket.send_json(runtime.snapshot())
         async for _ in websocket.iter_json():
             pass
     finally:
@@ -233,13 +270,20 @@ async def _play_game() -> None:
             pass
 
         resolution = engine.resolve(runtime.pending_actions)
-        snapshot = engine.snapshot(turn_messages=resolution["messages"])
+        runtime.score_canvas()
+        snapshot = runtime.snapshot(turn_messages=resolution["messages"])
         snapshot["accepted_slots"] = resolution["accepted_slots"]
         snapshot["collision_slots"] = resolution["collision_slots"]
         runtime.frames.append(snapshot)
         await _broadcast_globals(snapshot)
 
     results = engine.results()
+    if runtime.image_model_feedback is not None:
+        team_score = float(runtime.image_model_feedback["target_score"])
+        results["scores"] = [team_score] * len(engine.player_names)
+        results["image_model"] = runtime.image_model_feedback["model"]
+        results["final_image_model_feedback"] = runtime.image_model_feedback
+        results["image_model_score_trace"] = runtime.image_model_score_trace
     replay = {"config": CONFIG, "frames": runtime.frames, "results": results}
     write_data(
         RESULTS_URI,
@@ -264,7 +308,7 @@ async def _broadcast_players(*, final: bool = False) -> None:
     engine = runtime.engine
     stale: list[int] = []
     for slot, websocket in list(runtime.players.items()):
-        payload = engine.snapshot()
+        payload = runtime.snapshot()
         payload.update(
             {
                 "type": "final" if final else "observation",

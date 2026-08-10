@@ -112,21 +112,15 @@ recognizable drawing or chase unrelated labels."""
         image_model_feedback = """Shared image-model feedback: unavailable in this run.
 The team's recorded score is the best classifier score reached during the episode."""
     memory_summary = memory.prompt_summary() if memory else "Private experimental memory: none yet."
-    quickdraw_scorer = bool(feedback) and str(feedback.get("model", "")).startswith("quickdraw")
-    scorer_knowledge = """How the scorer works (exploit this):
-- It ignores color. It crops the bounding box of ALL non-white pixels, rescales that crop into a 28x28 mask, and
-  compares it against averaged human SKETCHES of each class. Consequences:
-  * One stray pixel far from the drawing stretches the crop and warps the whole shape. Strays are the most harmful
-    pixels on the board - erase them (your own with #FFFFFF) or ask their owner to.
-  * Human sketches are thin OUTLINES. A sparse outline of the target scores far better than solid filled regions.
-    Winning canvases are about 15-20% filled inside their bounding box; dense blobs score near zero.
-  * Radiating spokes around a round shape make it read as "sun". Never draw rays.
-- A strong light-bulb sketch, in canvas terms: a round glass OUTLINE (roughly a circle of radius ~6 centered near
-  (12,9)), a short narrow neck below it (two vertical strokes around x=9..10 and x=14..15 at y=14..17), and one or two
-  short horizontal base bars under the neck (y=17..19). No fill inside the glass, no rays, nothing outside this
-  region."""
-    if not quickdraw_scorer:
-        scorer_knowledge = ""
+    scorer_knowledge = """The scorer is a BLACK BOX - you do not know how it judges the canvas, and it may be swapped
+for a different one at any time, so never assume; MEASURE:
+- The only ground truth is the score delta after each simultaneous turn, attributed to the writes that landed that
+  turn. Read the top-prediction labels for hints about what the canvas currently resembles.
+- Treat the first round as the team's laboratory: run five DIFFERENT experiments (for example a thin outline stroke,
+  a filled patch, a far-away isolated pixel, an erase, a shape detail) and report on the board what each did to the
+  score. From the next round, exploit what the deltas proved; return to small probes only when progress stalls.
+- Generalize from evidence: when a kind of edit repeatedly helps or hurts, say so explicitly on the board so the team
+  builds a shared model of the scorer - then play to that model, not to guesses."""
     score_protocol = f"""Every turn, first assess what has happened so far: the score history, the outcome of your last
 action, and what the other agents said and painted. You cannot draw a recognizable {observation['target']} by yourself
 with one pixel per turn - the only way to score is to collaborate with the other LLM agents.
@@ -138,10 +132,12 @@ dropped. The other seats see the same observation you do and will reach for the 
 single most obvious next pixel unless the board shows it is yours: derive a distinct choice from your seat number
 (for example, take the plan segment closest to share {slot} of 5), and claim your next coordinate in your message so
 the others can route around you.
-PROTECT GAINS: the recorded score is the best EVER reached, but wasted turns are gone forever. If the score dropped
-right after your accepted write, erase that exact pixel with #FFFFFF next turn instead of adding more. Prefer
-completing the agreed outline over decorating it; when the outline is complete, thicken it stroke by stroke rather
-than filling it. Your public message must cite the signed score delta and state which plan segment you advanced."""
+PROTECT GAINS: the recorded score is the best EVER reached, but a great drawing can still be ruined. If the score
+dropped right after your accepted write, erase that exact pixel with #FFFFFF next turn instead of adding more.
+HOLD AT PEAKS: repainting one of your own pixels with its existing color is a legal write that changes nothing.
+When the score is near the best ever and recent edits keep lowering it, the strongest move is to HOLD - repaint an
+existing correct pixel - and say so, rather than experimenting on a winning canvas.
+Your public message must cite the signed score delta and state which plan segment you advanced or what you learned."""
     rounds = int(observation.get("rounds", 1) or 1)
     if rounds > 1:
         round_scores = observation.get("round_scores") or []

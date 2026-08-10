@@ -21,4 +21,10 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 COPY codrawing /app/codrawing
 
+# Claude Code refuses permission-bypass mode as root, so seats run as a
+# normal user.
+RUN useradd --create-home --uid 1000 agent
+USER agent
+ENV HOME=/home/agent
+
 CMD ["python", "-m", "codrawing.player.agent_player"]

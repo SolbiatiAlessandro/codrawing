@@ -1,0 +1,151 @@
+name: Hosted episode (existing coworld)
+
+on:
+  workflow_dispatch:
+    inputs:
+      coworld_id:
+        description: Existing coworld id (cow_...)
+        required: true
+        type: string
+      policy_ref:
+        description: Existing uploaded policy ref (name:vN)
+        required: true
+        type: string
+      turns:
+        description: Number of drawing turns
+        required: true
+        default: "5"
+        type: string
+      turns_per_round:
+        description: Turns per round
+        required: true
+        default: "5"
+        type: string
+      target:
+        description: Image target
+        required: true
+        default: light bulb
+        type: choice
+        options:
+          - cat
+          - dog
+          - elephant
+          - light bulb
+      strict_verify:
+        description: Fail the run when any seat misses a turn
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  run-episode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      COWORLD_VERSION: "0.1.35"
+      SOFTMAX_CLI_VERSION: "0.26.27"
+      SOFTMAX_TOKEN: ${{ secrets.SOFTMAX_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.10.7"
+          python-version: "3.12"
+          enable-cache: true
+          prune-cache: true
+
+      - name: Install Coworld CLI
+        run: |
+          uv sync
+          uv tool install "coworld[auth]==${COWORLD_VERSION}"
+          uv tool install "softmax-cli==${SOFTMAX_CLI_VERSION}"
+          softmax set-token "${SOFTMAX_TOKEN}"
+
+      - name: Request and wait for episode
+        id: hosted
+        shell: bash
+        run: |
+          mkdir -p hosted-artifacts
+          uv run python scripts/create_xp_request.py \
+            "${{ inputs.coworld_id }}" \
+            "${{ inputs.policy_ref }}" \
+            hosted-artifacts/xp-request.json \
+            "${{ inputs.turns }}" \
+            "${{ inputs.target }}" \
+            "codrawing-fast-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "${{ inputs.turns_per_round }}"
+
+          coworld xp-request create hosted-artifacts/xp-request.json --json \
+            | tee hosted-artifacts/xp-created.json
+          request_id="$(jq -r '.id' hosted-artifacts/xp-created.json)"
+
+          for _ in $(seq 1 220); do
+            coworld xp-request get "${request_id}" --json > hosted-artifacts/xp-status.json
+            status="$(jq -r '.status' hosted-artifacts/xp-status.json)"
+            echo "Experience Request ${request_id}: ${status}"
+            case "${status}" in
+              completed) break ;;
+              failed|cancelled)
+                jq . hosted-artifacts/xp-status.json
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+
+          if [[ "$(jq -r '.status' hosted-artifacts/xp-status.json)" != completed ]]; then
+            echo "Hosted episode did not complete before the workflow timeout" >&2
+            exit 1
+          fi
+
+          coworld xp-request episodes "${request_id}" --json > hosted-artifacts/episodes.json
+          episode_request_id="$(jq -r '.[0].id' hosted-artifacts/episodes.json)"
+          replay_url="$(jq -r '.[0].replay_url // empty' hosted-artifacts/episodes.json)"
+          if [[ -z "${episode_request_id}" || -z "${replay_url}" ]]; then
+            jq . hosted-artifacts/episodes.json
+            echo "Hosted episode has no replay" >&2
+            exit 1
+          fi
+
+          mkdir -p hosted-artifacts/logs
+          for slot in 0 1 2 3 4; do
+            coworld episode-logs "${episode_request_id}" \
+              --agent "${slot}" > "hosted-artifacts/logs/agent-${slot}.log"
+          done
+          curl -fsSL "${replay_url}" -o hosted-artifacts/replay
+          if [[ "${{ inputs.strict_verify }}" == "true" ]]; then
+            uv run python scripts/verify_llm_logs.py hosted-artifacts/logs "${{ inputs.turns }}"
+          fi
+          uv run python scripts/render_replay.py hosted-artifacts/replay hosted-artifacts/final-image.png
+
+          echo "replay_url=${replay_url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## co/place fast episode"
+            echo
+            echo "- Coworld: \`${{ inputs.coworld_id }}\`"
+            echo "- Policy: \`${{ inputs.policy_ref }}\`"
+            echo "- Target: \`${{ inputs.target }}\` · Turns: \`${{ inputs.turns }}\`"
+            if [[ -n "${{ steps.hosted.outputs.replay_url }}" ]]; then
+              echo "- [Open hosted replay](${{ steps.hosted.outputs.replay_url }})"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fast-episode-${{ github.run_id }}
+          path: hosted-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

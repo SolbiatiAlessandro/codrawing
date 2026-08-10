@@ -93,6 +93,7 @@ jobs:
             --name "${policy_name}" \
             --run python --run -m --run codrawing.player.llm_player \
             --secret-env REQUIRE_LLM=true \
+            --secret-env MODEL_STAGGER_SECONDS=1 \
             --use-bedrock \
             --bedrock-model "${{ inputs.model }}" 2>&1 | tee hosted-artifacts/upload-policy.log
           policy_ref="$(sed -n 's/^Upload complete: //p' hosted-artifacts/upload-policy.log | tail -n 1)"

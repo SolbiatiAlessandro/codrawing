@@ -85,6 +85,10 @@ jobs:
             "${GITHUB_SHA}"
           coworld build --project . --version "0.1.${GITHUB_RUN_NUMBER}"
           coworld certify dist/coworld_manifest.json --no-open-report --timeout-seconds 180
+          if [[ "${{ inputs.policy_module }}" == *agent_player ]]; then
+            docker build -f Dockerfile.agent -t coworld-coplace-agent:latest .
+            docker image inspect coworld-coplace-agent:latest --format 'Agent image size: {{.Size}} bytes'
+          fi
 
       - name: Upload Coworld and strict LLM policy
         id: upload
@@ -102,6 +106,9 @@ jobs:
 
           policy_name="${GITHUB_ACTOR}-codrawing-llm-${GITHUB_RUN_ID}"
           image_ref="$(jq -r '.game.runnable.image' dist/coworld_manifest.json)"
+          if [[ "${{ inputs.policy_module }}" == *agent_player ]]; then
+            image_ref="coworld-coplace-agent:latest"
+          fi
           coworld upload-policy "${image_ref}" \
             --name "${policy_name}" \
             --run python --run -m --run "${{ inputs.policy_module }}" \

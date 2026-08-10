@@ -20,14 +20,6 @@ RUN pip install --no-cache-dir \
     uvicorn[standard]==0.34.2 \
     websockets==15.0.1
 
-# Full agent-harness seats (codrawing.player.agent_player) drive a Claude Code
-# session per seat against the Bedrock sidecar.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
-    && npm install -g @anthropic-ai/claude-code \
-    && npm cache clean --force \
-    && rm -rf /var/lib/apt/lists/*
-
 ENV PYTHONPATH=/app
 ENV CODRAWING_IMAGE_MODEL=/app/models/squeezenet1_1.onnx
 ENV CODRAWING_IMAGE_MODEL_LABELS=/app/models/imagenet1k-labels.json

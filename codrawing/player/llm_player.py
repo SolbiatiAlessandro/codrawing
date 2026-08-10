@@ -116,6 +116,11 @@ The team's recorded score is the best classifier score reached during the episod
 action, and what the other agents said and painted. You cannot draw a recognizable {observation['target']} by yourself
 with one pixel per turn - the only way to score is to collaborate with the other LLM agents. Build on their work,
 announce your intent on the public board, follow through on agreements, and avoid coordinates others have claimed.
+All five seats act SIMULTANEOUSLY: if two or more seats paint the same pixel in the same turn, all of those writes are
+dropped. The other seats see the same observation you do and will reach for the same obvious pixel, so never pick the
+single most obvious next pixel unless the board shows it is yours: derive a distinct choice from your seat number
+(for example, work on the part of the shape you would get by splitting the remaining work five ways and taking share
+{slot}), and claim your next coordinate in your message so the others can route around you.
 Retain strategies whose score deltas are positive; do not repeat a strategy through consecutive negative deltas. You
 may erase one of your own harmful pixels with #FFFFFF. Your public message must cite the signed score delta and state
 the experiment you are performing."""
@@ -160,7 +165,7 @@ def call_model(prompt: str, slot: int) -> str:
     request_body: dict[str, Any] = {
         "model": model,
         "max_tokens": 512,
-        "temperature": 0.2,
+        "temperature": 0.9,
         "messages": [{"role": "user", "content": prompt}],
         "tools": [
             {

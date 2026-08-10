@@ -28,6 +28,14 @@ on:
           - dog
           - elephant
           - light bulb
+      policy_module:
+        description: Player policy module
+        required: true
+        default: codrawing.player.llm_player
+        type: choice
+        options:
+          - codrawing.player.llm_player
+          - codrawing.player.agent_player
 
 permissions:
   contents: read
@@ -96,9 +104,11 @@ jobs:
           image_ref="$(jq -r '.game.runnable.image' dist/coworld_manifest.json)"
           coworld upload-policy "${image_ref}" \
             --name "${policy_name}" \
-            --run python --run -m --run codrawing.player.llm_player \
+            --run python --run -m --run "${{ inputs.policy_module }}" \
             --secret-env REQUIRE_LLM=true \
             --secret-env MODEL_STAGGER_SECONDS=1 \
+            --secret-env AGENT_MODEL="${{ inputs.model }}" \
+            --secret-env AGENT_TIMEOUT_SECONDS=100 \
             --use-bedrock \
             --bedrock-model "${{ inputs.model }}" 2>&1 | tee hosted-artifacts/upload-policy.log
           policy_ref="$(sed -n 's/^Upload complete: //p' hosted-artifacts/upload-policy.log | tail -n 1)"

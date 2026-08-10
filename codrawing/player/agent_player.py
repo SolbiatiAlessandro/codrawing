@@ -115,14 +115,17 @@ def claude_environment() -> dict[str, str]:
     env = os.environ.copy()
     sidecar = env.get("AWS_ENDPOINT_URL_BEDROCK_RUNTIME")
     if sidecar:
-        env.setdefault("CLAUDE_CODE_USE_BEDROCK", "1")
-        env.setdefault("ANTHROPIC_BEDROCK_BASE_URL", sidecar)
+        env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        env["ANTHROPIC_BEDROCK_BASE_URL"] = sidecar
         env.setdefault("AWS_REGION", "us-east-1")
         # The sidecar authenticates by network position; the AWS client only
         # needs syntactically valid credentials to sign with.
         env.setdefault("AWS_ACCESS_KEY_ID", "sidecar")
         env.setdefault("AWS_SECRET_ACCESS_KEY", "sidecar")
-    env.setdefault("HOME", "/tmp")
+        # The hosted container has no usable login; give the CLI a writable HOME.
+        home = Path("/tmp/claude-home")
+        home.mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(home)
     env.setdefault("DISABLE_TELEMETRY", "1")
     env.setdefault("DISABLE_AUTOUPDATER", "1")
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")

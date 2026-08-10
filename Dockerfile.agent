@@ -1,17 +1,21 @@
 # Slim player-only image for full agent-harness seats.
-# Softmax limits player images to 512 MiB, so this image contains only the
-# player code, Node, and Claude Code - no game server, onnx, or torch.
-
-FROM docker.io/library/node:22-slim AS harness
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+# Softmax limits player images to 512 MiB. This image contains only the
+# player code, websockets, and the native Claude Code binary (no Node,
+# no game server, no onnx).
 
 FROM docker.io/library/python:3.12-slim
+
 RUN pip install --no-cache-dir websockets==15.0.1
-COPY --from=harness /usr/local/bin/node /usr/local/bin/node
-COPY --from=harness /usr/local/lib/node_modules/@anthropic-ai/claude-code \
-    /usr/local/lib/node_modules/@anthropic-ai/claude-code
-RUN ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/local/bin/claude \
-    && chmod +x /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && HOME=/opt/claude-install bash -c 'curl -fsSL https://claude.ai/install.sh | bash' \
+    && install -m 755 "$(readlink -f /opt/claude-install/.local/bin/claude)" /usr/local/bin/claude \
+    && rm -rf /opt/claude-install \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && /usr/local/bin/claude --version
 
 ENV PYTHONPATH=/app
 WORKDIR /app

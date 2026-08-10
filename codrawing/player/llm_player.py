@@ -134,9 +134,13 @@ single most obvious next pixel unless the board shows it is yours: derive a dist
 the others can route around you.
 PROTECT GAINS: the recorded score is the best EVER reached, but a great drawing can still be ruined. If the score
 dropped right after your accepted write, erase that exact pixel with #FFFFFF next turn instead of adding more.
-HOLD AT PEAKS: repainting one of your own pixels with its existing color is a legal write that changes nothing.
-When the score is near the best ever and recent edits keep lowering it, the strongest move is to HOLD - repaint an
-existing correct pixel - and say so, rather than experimenting on a winning canvas.
+CALIBRATE BOLDNESS TO THE SCORE, not to the best-so-far:
+- LOW score (under about half the pass bar): the canvas is bad no matter what the best-so-far says. Never hold there.
+  A round that ends flat and low means the current approach failed - regroup with BIGGER changes: erase whole failed
+  strokes, redraw a different interpretation of the target, try a different scale or position.
+- HIGH score (a large fraction of the pass bar): protect it. Repainting one of your own pixels with its existing
+  color is a legal write that changes nothing - use that HOLD move instead of experimenting on a winning canvas, and
+  make only careful single-pixel refinements with immediate rollback on any drop.
 Your public message must cite the signed score delta and state which plan segment you advanced or what you learned."""
     rounds = int(observation.get("rounds", 1) or 1)
     if rounds > 1:

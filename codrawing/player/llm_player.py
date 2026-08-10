@@ -14,14 +14,6 @@ import websockets
 from codrawing.player.pixel_templates import make_template
 
 SEAT_COLORS = ("#EF4444", "#3B82F6", "#22C55E", "#F59E0B", "#A855F7")
-SEAT_ROLES = (
-    "silhouette and outer contour",
-    "head and facial features",
-    "body, legs, and grounding",
-    "ears, tail, and distinctive details",
-    "score captain: interpret classifier feedback, run experiments, and direct the team",
-)
-SCORE_CAPTAIN_SLOT = 4
 
 
 @dataclass
@@ -110,37 +102,29 @@ def prompt_for(
         )
         image_model_feedback = f"""Shared image-model feedback after turn {feedback['turn']}:
 - target score: {feedback['target_score']:.6f} ({feedback['score_delta']:+.6f} this turn)
-- evaluation: {'PASSING' if feedback['passing'] else 'NOT PASSING'}; the team passes only with a final target score strictly greater than {feedback['pass_threshold']:.0%}
-- best target label: {feedback['best_target_label']} (rank {feedback['target_rank']} of 1000)
+- evaluation: {'PASSING' if feedback['passing'] else 'NOT PASSING'}; the team's recorded score is the BEST score reached
+  during the episode, and the team passes only if that best score strictly exceeds {feedback['pass_threshold']:.0%}
+- best target label: {feedback['best_target_label']} (rank {feedback['target_rank']} of {feedback.get('label_count', 1000)})
 - top predictions: {top_predictions}
 This small classifier is imperfect. Treat score changes as team evidence, not as an instruction to erase a
 recognizable drawing or chase unrelated labels."""
     else:
         image_model_feedback = """Shared image-model feedback: unavailable in this run.
-The team passes only with a final target score strictly greater than 50%."""
+The team's recorded score is the best classifier score reached during the episode."""
     memory_summary = memory.prompt_summary() if memory else "Private experimental memory: none yet."
-    if slot == SCORE_CAPTAIN_SLOT:
-        score_protocol = """You are the sole SCORE CAPTAIN. Classifier score is the primary objective; visual resemblance is a useful prior.
-Use a controlled black-box optimization loop:
-1. OBSERVE the latest numeric delta and compare current score with the best score in memory.
-2. RETAIN edits that raise the score. If your last accepted painted pixel coincided with a negative delta, strongly
-   consider erasing that exact pixel with #FFFFFF before trying a new hypothesis.
-3. EXPERIMENT with compact, contiguous, symmetric cat-like regions. The current thin isolated strokes are being
-   classified as tools such as candles and whistles, so do not continue them when their score trend is negative.
-4. DIRECT the other seats with one concrete region or coordinate hypothesis for the next turn.
-Your public message must start `SCORE` and include the current score, signed delta, RETAIN/REJECT verdict, and directive."""
-    else:
-        score_protocol = f"""Seat {SCORE_CAPTAIN_SLOT} is the SCORE CAPTAIN. Treat its latest specific directive as higher priority than your
-original drawing role. Compare the numeric delta with your last action; do not repeat a strategy through consecutive
-negative deltas. You may erase one of your own harmful pixels with #FFFFFF. Your public message must start `DELTA`
-and state the signed delta plus the experiment you are performing."""
+    score_protocol = f"""Every turn, first assess what has happened so far: the score history, the outcome of your last
+action, and what the other agents said and painted. You cannot draw a recognizable {observation['target']} by yourself
+with one pixel per turn - the only way to score is to collaborate with the other LLM agents. Build on their work,
+announce your intent on the public board, follow through on agreements, and avoid coordinates others have claimed.
+Retain strategies whose score deltas are positive; do not repeat a strategy through consecutive negative deltas. You
+may erase one of your own harmful pixels with #FFFFFF. Your public message must cite the signed score delta and state
+the experiment you are performing."""
     return f"""You are artist seat {slot} in a five-agent collaborative pixel-art game.
 Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.
 Turn: {observation['turn']} of {observation['max_turns']}.
 Your assigned paint color is {SEAT_COLORS[slot]}. Use exactly this color for paint; #FFFFFF is allowed only to erase
 a prior harmful pixel.
-Your specialization is {SEAT_ROLES[slot]}. Prefer that responsibility and avoid coordinates announced by others.
 Painted pixels as x,y:#RRGGBB (all omitted pixels are white):
 {'; '.join(painted) if painted else '(blank canvas)'}
 Recent public board:

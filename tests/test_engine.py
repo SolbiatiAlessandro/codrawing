@@ -7,8 +7,6 @@ from codrawing.game.image_model import MODEL_NAME, PASS_THRESHOLD, TARGET_INDICE
 from codrawing.player.llm_player import (
     AgentMemory,
     SEAT_COLORS,
-    SEAT_ROLES,
-    SCORE_CAPTAIN_SLOT,
     enforce_seat_color,
     extract_action,
     extract_model_output,
@@ -107,13 +105,11 @@ class TemplateTest(unittest.TestCase):
             "max_turns": 50,
         }
         self.assertEqual(len(set(SEAT_COLORS)), 5)
-        self.assertEqual(len(set(SEAT_ROLES)), 5)
         for slot in range(5):
-            self.assertIn(
-                f"assigned paint color is {SEAT_COLORS[slot]}",
-                prompt_for(observation, slot),
-            )
-            self.assertIn(f"specialization is {SEAT_ROLES[slot]}", prompt_for(observation, slot))
+            prompt = prompt_for(observation, slot)
+            self.assertIn(f"assigned paint color is {SEAT_COLORS[slot]}", prompt)
+            self.assertIn("collaborate with the other LLM agents", prompt)
+            self.assertNotIn("specialization", prompt)
 
     def test_llm_prompt_includes_shared_image_model_feedback(self) -> None:
         observation = {
@@ -141,7 +137,7 @@ class TemplateTest(unittest.TestCase):
         }
         prompt = prompt_for(observation, 0)
         self.assertIn("target score: 0.012345 (+0.001000 this turn)", prompt)
-        self.assertIn("team passes only with a final target score strictly greater than 50%", prompt)
+        self.assertIn("team passes only if that best score strictly exceeds 50%", prompt)
         self.assertIn("evaluation: NOT PASSING", prompt)
         self.assertIn("best target label: tabby (rank 17 of 1000)", prompt)
         self.assertIn("comic book 12.00%", prompt)
@@ -151,10 +147,9 @@ class TemplateTest(unittest.TestCase):
         self.assertEqual(len(TARGET_INDICES["dog"]), 118)
         self.assertEqual(TARGET_INDICES["elephant"], (101, 385, 386))
 
-    def test_score_captain_receives_persistent_experimental_memory(self) -> None:
-        memory = AgentMemory(
-            last_action={"x": 3, "y": 4, "color": SEAT_COLORS[SCORE_CAPTAIN_SLOT]}
-        )
+    def test_seat_receives_persistent_experimental_memory(self) -> None:
+        slot = 4
+        memory = AgentMemory(last_action={"x": 3, "y": 4, "color": SEAT_COLORS[slot]})
         observation = {
             "width": 8,
             "height": 8,
@@ -163,7 +158,7 @@ class TemplateTest(unittest.TestCase):
             "target": "cat",
             "turn": 1,
             "max_turns": 50,
-            "previous_accepted_slots": [SCORE_CAPTAIN_SLOT],
+            "previous_accepted_slots": [slot],
             "previous_collision_slots": [],
             "image_model_feedback": {
                 "model": MODEL_NAME,
@@ -177,11 +172,10 @@ class TemplateTest(unittest.TestCase):
                 "top_predictions": [{"label": "whistle", "probability": 0.1}],
             },
         }
-        memory.observe(observation, SCORE_CAPTAIN_SLOT)
-        prompt = prompt_for(observation, SCORE_CAPTAIN_SLOT, memory)
-        self.assertIn("sole SCORE CAPTAIN", prompt)
+        memory.observe(observation, slot)
+        prompt = prompt_for(observation, slot, memory)
         self.assertIn("accepted; simultaneous team score delta -0.00100000", prompt)
-        self.assertIn("erasing that exact pixel with #FFFFFF", prompt)
+        self.assertIn("erase one of your own harmful pixels with #FFFFFF", prompt)
 
     def test_white_is_an_eraser_and_other_colors_are_seat_locked(self) -> None:
         erase = action(1, 2, "#ffffff")

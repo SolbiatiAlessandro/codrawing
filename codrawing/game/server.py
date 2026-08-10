@@ -17,7 +17,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
 from codrawing.game.engine import PixelArtEngine, choose_target
-from codrawing.game.image_model import PASS_THRESHOLD, ImageModelScorer, scorer_from_environment
+from codrawing.game.image_model import TargetScorerRouter, scorer_from_environment
 
 
 CLIENT_DIR = Path(__file__).parent / "client"
@@ -108,7 +108,7 @@ class GameRuntime:
         self.started = False
         self.finished = False
         self.frames: list[dict[str, Any]] = []
-        self.image_model: ImageModelScorer | None = scorer_from_environment() if TOKENS else None
+        self.image_model: TargetScorerRouter | None = scorer_from_environment() if TOKENS else None
         self.image_model_feedback: dict[str, Any] | None = None
         self.image_model_score_trace: list[dict[str, Any]] = []
         episode_seed = CONFIG.get("seed")
@@ -284,11 +284,18 @@ async def _play_game() -> None:
 
     results = engine.results()
     if runtime.image_model_feedback is not None:
-        team_score = float(runtime.image_model_feedback["target_score"])
-        results["scores"] = [team_score] * len(engine.player_names)
+        # The team competes on the best classifier score reached within the
+        # episode's turn budget, so a late regression cannot erase progress.
+        best_score = max(
+            float(feedback["target_score"])
+            for feedback in runtime.image_model_score_trace
+        )
+        threshold = float(runtime.image_model_feedback["pass_threshold"])
+        results["scores"] = [best_score] * len(engine.player_names)
+        results["best_target_score"] = best_score
         results["image_model"] = runtime.image_model_feedback["model"]
-        results["evaluation_threshold"] = PASS_THRESHOLD
-        results["evaluation_passed"] = team_score > PASS_THRESHOLD
+        results["evaluation_threshold"] = threshold
+        results["evaluation_passed"] = best_score > threshold
         results["final_image_model_feedback"] = runtime.image_model_feedback
         results["image_model_score_trace"] = runtime.image_model_score_trace
     replay = {"config": CONFIG, "frames": runtime.frames, "results": results}

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Permanent Codrawing Coworld</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { margin: 0; background: #111318; color: #e7e9ee; }
+    main { display: grid; grid-template-columns: minmax(420px, 680px) minmax(320px, 1fr); gap: 24px; padding: 24px; }
+    canvas { width: min(80vh, 680px); height: min(80vh, 680px); max-width: 100%; image-rendering: pixelated; background: white; border: 1px solid #343843; }
+    .card { background: #1a1d24; border: 1px solid #303541; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    h1, h2 { margin-top: 0; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 14px; color: #aeb5c4; }
+    #score { font-size: 32px; }
+    .passing { color: #4ade80; } .failing { color: #fbbf24; }
+    .agent { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+    .swatch { width: 12px; height: 12px; border-radius: 2px; }
+    #messages, #history { max-height: 260px; overflow: auto; font-size: 12px; }
+    .entry { padding: 7px 0; border-bottom: 1px solid #2a2e38; }
+    .muted { color: #8d94a3; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <section>
+    <h1>Permanent Coworld · target: <span id="target">…</span></h1>
+    <canvas id="board" width="128" height="128"></canvas>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>SHAPE CLASSIFIER</h2>
+      <div id="score">…</div>
+      <div id="predictions" class="muted"></div>
+      <div id="stats" class="muted"></div>
+    </div>
+    <div class="card"><h2>FIVE RESIDENTS</h2><div id="agents"></div></div>
+    <div class="card"><h2>MESSAGE BOARD</h2><div id="messages"></div></div>
+    <div class="card"><h2>RECENT PIXEL HISTORY</h2><div id="history"></div></div>
+  </aside>
+</main>
+<script>
+const canvas = document.querySelector('#board');
+const context = canvas.getContext('2d');
+function esc(value) { const e = document.createElement('div'); e.textContent = value; return e.innerHTML; }
+async function refresh() {
+  const state = await fetch('/api/public/state').then(r => r.json());
+  document.querySelector('#target').textContent = state.target;
+  context.fillStyle = '#FFFFFF'; context.fillRect(0, 0, state.width, state.height);
+  for (const pixel of state.pixels) { context.fillStyle = pixel.color; context.fillRect(pixel.x, pixel.y, 1, 1); }
+  const pct = (state.score.target_score * 100).toFixed(3) + '%';
+  const score = document.querySelector('#score'); score.textContent = pct;
+  score.className = state.score.passing ? 'passing' : 'failing';
+  document.querySelector('#predictions').textContent = state.score.top_predictions.map(p => `${p.label} ${(p.probability * 100).toFixed(1)}%`).join(' · ');
+  document.querySelector('#stats').textContent = `${state.pixels.length} occupied pixels · ${state.rounds} rounds · event ${state.event_id}`;
+  document.querySelector('#agents').innerHTML = state.agents.map(a => {
+    const status = a.wake_status ? `${a.wake_status} · round ${a.latest_round} · ${a.pixel_calls}/${a.pixel_budget} pixels` : 'not yet awakened';
+    return `<div class="agent"><span class="swatch" style="background:${a.color}"></span><div>${esc(a.name)}<br><span class="muted">${esc(a.model)} · ${esc(status)}</span></div></div>`;
+  }).join('');
+  document.querySelector('#messages').innerHTML = state.messages.slice(-30).reverse().map(m => `<div class="entry"><span style="color:${m.color}">${esc(m.agent)}</span>: ${esc(m.message)}</div>`).join('') || '<span class="muted">No messages yet.</span>';
+  const history = await fetch(`/api/public/history?after=${Math.max(0, state.event_id - 40)}&limit=40`).then(r => r.json());
+  document.querySelector('#history').innerHTML = history.events.reverse().map(e => e.kind === 'pixel' ? `<div class="entry">#${e.id} ${esc(e.agent_name)} (${e.x},${e.y}) ${e.before_color} → ${e.after_color}<br><span class="muted">score ${(100*e.score_after).toFixed(3)}% (${(100*(e.score_after-e.score_before)).toFixed(3)}pp)</span></div>` : '').join('');
+}
+refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

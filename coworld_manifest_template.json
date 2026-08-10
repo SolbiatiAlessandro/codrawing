@@ -6,8 +6,8 @@
     "pixel-art"
   ],
   "game": {
-    "name": "codrawing",
-    "description": "Five agents coordinate through one public message and one pixel per turn to draw a shared target. Every turn, a small frozen ImageNet classifier returns shared feedback; a human can also judge the replay.",
+    "name": "coplace",
+    "description": "co/place: an r/place-inspired board where five agents coordinate through one public message and one pixel per turn to draw a shared target. Every turn, a small frozen classifier (SqueezeNet for animal targets, a Quick, Draw! shape model for light bulb) returns shared feedback; a human can also judge the replay.",
     "owner": "Alessandro",
     "runnable": {
       "type": "game",
@@ -83,7 +83,8 @@
             "enum": [
               "cat",
               "dog",
-              "elephant"
+              "elephant",
+              "light bulb"
             ]
           }
         },
@@ -137,13 +138,17 @@
             "pass_threshold",
             "passing",
             "target_rank",
+            "label_count",
             "best_target_label",
             "top_predictions"
           ],
           "properties": {
             "model": {
               "type": "string",
-              "const": "squeezenet1_1_imagenet1k_v1"
+              "enum": [
+                "squeezenet1_1_imagenet1k_v1",
+                "quickdraw_nearest_prototype_v1"
+              ]
             },
             "turn": {
               "type": "integer",
@@ -161,7 +166,10 @@
             },
             "pass_threshold": {
               "type": "number",
-              "const": 0.5
+              "enum": [
+                0.5,
+                0.95
+              ]
             },
             "passing": {
               "type": "boolean"
@@ -169,6 +177,11 @@
             "target_rank": {
               "type": "integer",
               "minimum": 1,
+              "maximum": 1000
+            },
+            "label_count": {
+              "type": "integer",
+              "minimum": 2,
               "maximum": 1000
             },
             "best_target_label": {
@@ -193,6 +206,7 @@
         "final_canvas",
         "image_model",
         "evaluation_threshold",
+        "best_target_score",
         "evaluation_passed",
         "final_image_model_feedback",
         "image_model_score_trace"
@@ -211,7 +225,8 @@
           "enum": [
             "cat",
             "dog",
-            "elephant"
+            "elephant",
+            "light bulb"
           ]
         },
         "turns": {
@@ -236,11 +251,22 @@
         },
         "image_model": {
           "type": "string",
-          "const": "squeezenet1_1_imagenet1k_v1"
+          "enum": [
+            "squeezenet1_1_imagenet1k_v1",
+            "quickdraw_nearest_prototype_v1"
+          ]
         },
         "evaluation_threshold": {
           "type": "number",
-          "const": 0.5
+          "enum": [
+            0.5,
+            0.95
+          ]
+        },
+        "best_target_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         },
         "evaluation_passed": {
           "type": "boolean"
@@ -290,6 +316,38 @@
     }
   ],
   "variants": [
+    {
+      "id": "light-bulb",
+      "name": "Light bulb",
+      "description": "A 24x24, five-agent episode drawing a light bulb, scored every turn by a Quick, Draw! shape classifier.",
+      "game_config": {
+        "width": 24,
+        "height": 24,
+        "max_turns": 50,
+        "targets": [
+          "light bulb"
+        ],
+        "player_connect_timeout_seconds": 120,
+        "action_timeout_seconds": 60,
+        "players": [
+          {
+            "name": "Artist 1"
+          },
+          {
+            "name": "Artist 2"
+          },
+          {
+            "name": "Artist 3"
+          },
+          {
+            "name": "Artist 4"
+          },
+          {
+            "name": "Artist 5"
+          }
+        ]
+      }
+    },
     {
       "id": "human-review",
       "name": "Human review",

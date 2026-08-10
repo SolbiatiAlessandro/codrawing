@@ -15,12 +15,12 @@ def create(
 ) -> None:
     if turns < 1 or turns > 200:
         raise ValueError("turns must be between 1 and 200")
-    if target not in {"cat", "dog", "elephant"}:
-        raise ValueError("target must be cat, dog, or elephant")
+    if target not in {"cat", "dog", "elephant", "light bulb"}:
+        raise ValueError("target must be cat, dog, elephant, or light bulb")
     payload = {
         "idempotency_key": idempotency_key,
         "coworld_id": coworld_id,
-        "variant_id": "human-review",
+        "variant_id": "light-bulb" if target == "light bulb" else "human-review",
         "game_config_overrides": {
             "max_turns": turns,
             "targets": [target],

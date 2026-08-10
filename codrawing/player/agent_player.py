@@ -239,13 +239,19 @@ async def main() -> None:
                     for nudge in range(3):
                         budget = turn_timeout if nudge == 0 else 25.0
                         try:
-                            await asyncio.wait_for(_run_query(client, prompt), timeout=budget)
+                            reply = await asyncio.wait_for(_run_query(client, prompt), timeout=budget)
                         except (TimeoutError, asyncio.TimeoutError):
                             print(f"turn {seat.turn}: agent query timed out", flush=True)
                             if nudge == 2 or seat.painted:
                                 break
+                            reply = ""
+                        except Exception as exc:
+                            print(f"turn {seat.turn}: agent query failed: {exc!r}", flush=True)
+                            break
                         if seat.painted:
                             break
+                        if reply:
+                            print(f"turn {seat.turn}: no paint in reply: {reply[:200]}", flush=True)
                         prompt = "You have not painted yet. Call paint_pixel immediately."
                     if seat.painted:
                         print(
@@ -266,10 +272,20 @@ async def main() -> None:
             reader.cancel()
 
 
-async def _run_query(client: ClaudeSDKClient, prompt: str) -> None:
+async def _run_query(client: ClaudeSDKClient, prompt: str) -> str:
     await client.query(prompt)
-    async for _ in client.receive_response():
-        pass
+    parts: list[str] = []
+    async for message in client.receive_response():
+        for block in getattr(message, "content", []) or []:
+            text = getattr(block, "text", None)
+            if text:
+                parts.append(str(text))
+        result = getattr(message, "result", None)
+        if result:
+            parts.append(str(result))
+        if getattr(message, "is_error", False):
+            parts.append(f"[error message: {message}]")
+    return " ".join(parts)
 
 
 if __name__ == "__main__":

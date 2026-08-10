@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir websockets==15.0.1 claude-agent-sdk==0.2.134
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
-    && HOME=/opt/claude-install bash -c 'curl -fsSL https://claude.ai/install.sh | bash' \
+    && HOME=/opt/claude-install bash -c 'curl -fsSL https://claude.ai/install.sh | bash -s 2.1.226' \
     && install -m 755 "$(readlink -f /opt/claude-install/.local/bin/claude)" /usr/local/bin/claude \
     && rm -rf /opt/claude-install \
     && apt-get purge -y curl \

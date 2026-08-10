@@ -163,6 +163,9 @@ How to play each turn:
 3. Plan in your private workspace: keep a PLAN file, use python to compute exact coordinates.
 4. When coordination is clear, call paint_pixel EXACTLY ONCE, then end your reply. The game turn resolves only when
    all five seats have painted, so do not stall forever - a few board posts, then paint.
+5. BE FAST. You have a strict time budget per turn; a seat that misses the paint window loses its pixel. Each turn:
+   read_board once, post at most TWO short messages, then paint. Post exact coordinates ("seat N takes (x,y)"), not
+   vague zones. Long file work is only worth it once, early, to compute the full point plan.
 """
 
 
@@ -234,14 +237,16 @@ async def main() -> None:
                     seat.painted = False
                     prompt = observation_text(observation)
                     for nudge in range(3):
+                        budget = turn_timeout if nudge == 0 else 25.0
                         try:
-                            await asyncio.wait_for(_run_query(client, prompt), timeout=turn_timeout)
+                            await asyncio.wait_for(_run_query(client, prompt), timeout=budget)
                         except (TimeoutError, asyncio.TimeoutError):
                             print(f"turn {seat.turn}: agent query timed out", flush=True)
-                            break
+                            if nudge == 2 or seat.painted:
+                                break
                         if seat.painted:
                             break
-                        prompt = "You have not painted yet. Call paint_pixel now to end your turn."
+                        prompt = "You have not painted yet. Call paint_pixel immediately."
                     if seat.painted:
                         print(
                             json.dumps(

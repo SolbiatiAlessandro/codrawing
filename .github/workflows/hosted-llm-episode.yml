@@ -115,7 +115,7 @@ jobs:
             --secret-env REQUIRE_LLM=true \
             --secret-env MODEL_STAGGER_SECONDS=1 \
             --secret-env AGENT_MODEL="${{ inputs.model }}" \
-            --secret-env AGENT_TIMEOUT_SECONDS=100 \
+            --secret-env AGENT_TIMEOUT_SECONDS=85 \
             --use-bedrock \
             --bedrock-model "${{ inputs.model }}" 2>&1 | tee hosted-artifacts/upload-policy.log
           policy_ref="$(sed -n 's/^Upload complete: //p' hosted-artifacts/upload-policy.log | tail -n 1)"

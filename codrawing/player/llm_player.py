@@ -252,14 +252,29 @@ async def main() -> None:
     memory = AgentMemory()
     async with websockets.connect(url) as websocket:
         slot: int | None = None
-        async for raw_message in websocket:
-            observation = cast(dict[str, Any], json.loads(raw_message))
-            if observation["type"] == "welcome":
-                slot = int(observation["slot"])
-                continue
-            if observation["type"] == "final":
+        while True:
+            # A slow model call leaves newer observations queued; acting on a
+            # stale one submits for an already-resolved turn and is dropped.
+            # Drain the queue and act only on the latest observation.
+            try:
+                pending = [await websocket.recv()]
+                while True:
+                    try:
+                        pending.append(await asyncio.wait_for(websocket.recv(), timeout=0.05))
+                    except asyncio.TimeoutError:
+                        break
+            except websockets.ConnectionClosed:
                 return
-            if observation["type"] != "observation" or slot is None:
+            observation: dict[str, Any] | None = None
+            for raw_message in pending:
+                payload = cast(dict[str, Any], json.loads(raw_message))
+                if payload["type"] == "welcome":
+                    slot = int(payload["slot"])
+                elif payload["type"] == "final":
+                    return
+                elif payload["type"] == "observation":
+                    observation = payload
+            if observation is None or slot is None:
                 continue
             memory.observe(observation, slot)
             if stagger_seconds:

@@ -306,6 +306,7 @@
     socket.onmessage = event => {
       const payload = JSON.parse(event.data);
       if (payload.type === 'replay') loadReplay(payload);
+      else if (payload.type === 'board_update') return;
       else handleLive(payload);
     };
   }

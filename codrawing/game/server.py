@@ -248,11 +248,19 @@ async def player(websocket: WebSocket) -> None:
             engine = runtime.engine
             if engine is None or runtime.finished:
                 continue
-            if raw.get("turn") != engine.turn or slot in runtime.pending_actions:
+            if raw.get("turn") != engine.turn:
+                continue
+            if raw.get("type") == "message":
+                # Live board post: visible to every seat immediately, outside
+                # the paint barrier.
+                if engine.post_message(slot, str(raw.get("text", ""))):
+                    await _broadcast_board_update(engine.messages[-1])
+                continue
+            if slot in runtime.pending_actions:
                 continue
             runtime.pending_actions[slot] = raw
             # Barrier: the turn resolves once every currently connected player
-            # has submitted, so per-agent latency never costs anyone a write.
+            # has painted, so per-agent latency never costs anyone a write.
             if len(runtime.pending_actions) >= max(1, len(runtime.players)):
                 runtime.action_event.set()
     finally:
@@ -350,6 +358,16 @@ async def _broadcast_players(*, final: bool = False) -> None:
             stale.append(slot)
     for slot in stale:
         runtime.players.pop(slot, None)
+
+
+async def _broadcast_board_update(message: dict[str, Any]) -> None:
+    payload = {"type": "board_update", "message": message.copy()}
+    for sockets in (list(runtime.players.values()), list(runtime.global_viewers)):
+        for websocket in sockets:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
 
 
 async def _broadcast_globals(snapshot: dict[str, Any]) -> None:

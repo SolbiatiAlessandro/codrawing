@@ -1,13 +1,17 @@
-"""Local seat driven by a full agent harness (Claude Code session).
+"""Seat driven by a Claude Code agent session with real game tools.
 
-Unlike llm_player (one stateless model call per turn), each seat here is one
-persistent Claude Code session: the first turn starts the session with the
-game briefing, later turns resume it with only the new observation, and the
-agent keeps a private workspace directory where it can run bash/python to
-plan coordinates and keep notes between turns.
+Each seat is one persistent Claude Agent SDK session. The game is exposed to
+the agent as in-process MCP tools:
 
-    COWORLD_PLAYER_WS_URL=... AGENT_MODEL=claude-sonnet-5 AGENT_WORKSPACE=/tmp/seat0 \
-        python -m codrawing.player.agent_player
+- post_message(text): post to the shared public board, visible to all seats
+  immediately (live, mid-turn).
+- read_board(): read the latest board messages, including posts made by other
+  seats during the current turn.
+- paint_pixel(x, y, color): submit this turn's single pixel. The game turn
+  resolves only when every seat has painted.
+
+The agent works freely (thinks, uses bash/python/files in its workspace,
+posts and reads board messages) until it decides to call paint_pixel.
 """
 
 from __future__ import annotations
@@ -19,100 +23,21 @@ from pathlib import Path
 from typing import Any, cast
 
 import websockets
-
-from codrawing.player.llm_player import (
-    SEAT_COLORS,
-    enforce_seat_color,
-    normalize_decision,
-    validate_decision,
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    create_sdk_mcp_server,
+    tool,
 )
 
+from codrawing.player.llm_player import SEAT_COLORS
 
-def briefing(observation: dict[str, Any], slot: int) -> str:
-    width, height = observation["width"], observation["height"]
-    rounds = int(observation.get("rounds", 1) or 1)
-    round_line = (
-        f"The episode is split into {rounds} rounds of {observation.get('turns_per_round')} turns; "
-        "at each round's end the score is logged and compared against other teams.\n"
-        if rounds > 1
-        else ""
-    )
-    return f"""You are seat {slot} in co/place, a cooperative pixel-art game. You and the other seats share one
-{width}x{height} canvas (x grows right, y grows down) and must draw the target together: one pixel per seat per turn,
-all seats act simultaneously, and if two seats paint the same pixel in the same turn both writes are dropped.
-Shared target: {observation['target']}. Episode length: {observation['max_turns']} turns.
-{round_line}Your paint color is {SEAT_COLORS[slot]}; #FFFFFF erases. A classifier scores the canvas after every turn
-and the team's recorded score is the BEST score ever reached. The classifier is a black box - infer how it behaves
-from the score deltas you observe.
-
-You are a full agent with a private workspace directory (your current directory). USE IT:
-- write yourself a PLAN file and update it as the game evolves;
-- use python or shell to compute exact coordinate lists for shapes instead of guessing;
-- keep a log of score deltas and what caused them, and consult it before acting.
-Coordinate with the other seats through your public message: claim coordinates, divide work, follow agreements.
-
-Each time I send you an observation, reply however you like (think, use tools), but your reply MUST end with a
-single line of the form:
-ACTION: {{"message": "<public message, max 240 chars>", "paint": {{"x": <int>, "y": <int>, "color": "#RRGGBB"}}}}
-"""
+COLOR_HINT = "#RRGGBB"
 
 
-def observation_update(observation: dict[str, Any], slot: int) -> str:
-    width = observation["width"]
-    painted = [
-        f"{index % width},{index // width}:{color}"
-        for index, color in enumerate(observation["canvas"])
-        if color != "#FFFFFF"
-    ]
-    messages = "\n".join(
-        f"T{item['turn']} seat{item['slot']}: {item['text']}"
-        for item in observation.get("recent_messages", [])[-10:]
-    ) or "(none)"
-    feedback = observation.get("image_model_feedback")
-    if feedback:
-        score_line = (
-            f"score {feedback['target_score']:.6f} (delta {feedback['score_delta']:+.6f}), "
-            f"rank {feedback['target_rank']}/{feedback.get('label_count', '?')}, "
-            f"top: {', '.join(p['label'] + ' ' + format(p['probability'], '.1%') for p in feedback['top_predictions'][:3])}"
-        )
-    else:
-        score_line = "unavailable"
-    accepted = observation.get("previous_accepted_slots", [])
-    collided = observation.get("previous_collision_slots", [])
-    return f"""Turn {observation['turn']} of {observation['max_turns']} (round {observation.get('round', 1)}/{observation.get('rounds', 1)}).
-Classifier: {score_line}
-Last turn: accepted seats {accepted}, collided seats {collided}.
-Painted pixels: {'; '.join(painted) if painted else '(blank canvas)'}
-Recent board:
-{messages}
-
-Decide your move. End with the ACTION line."""
-
-
-def extract_last_action(text: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    candidate: dict[str, Any] | None = None
-    index = 0
-    while True:
-        start = text.find("{", index)
-        if start == -1:
-            break
-        try:
-            value, end = decoder.raw_decode(text[start:])
-        except json.JSONDecodeError:
-            index = start + 1
-            continue
-        if isinstance(value, dict) and "message" in value and "paint" in value:
-            candidate = cast(dict[str, Any], value)
-        index = start + max(end, 1)
-    if candidate is None:
-        raise ValueError("agent reply contained no ACTION object")
-    return candidate
-
-
-def claude_environment() -> dict[str, str]:
-    """Environment for the claude subprocess; hosted seats use the Bedrock sidecar."""
-    env = os.environ.copy()
+def claude_environment() -> None:
+    """Set env for the claude subprocess; hosted seats use the Bedrock sidecar."""
+    env = os.environ
     sidecar = env.get("AWS_ENDPOINT_URL_BEDROCK_RUNTIME")
     if sidecar:
         env["CLAUDE_CODE_USE_BEDROCK"] = "1"
@@ -122,137 +47,224 @@ def claude_environment() -> dict[str, str]:
         # needs syntactically valid credentials to sign with.
         env.setdefault("AWS_ACCESS_KEY_ID", "sidecar")
         env.setdefault("AWS_SECRET_ACCESS_KEY", "sidecar")
-        # The hosted container has no usable login; give the CLI a writable HOME.
         home = Path("/tmp/claude-home")
         home.mkdir(parents=True, exist_ok=True)
         env["HOME"] = str(home)
     env.setdefault("DISABLE_TELEMETRY", "1")
     env.setdefault("DISABLE_AUTOUPDATER", "1")
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
-    return env
 
 
-async def run_claude(
-    prompt: str,
-    *,
-    model: str,
-    workspace: Path,
-    session_id: str | None,
-    timeout: float,
-) -> tuple[str | None, str]:
-    command = [
-        "claude",
-        "--print",
-        "--verbose",
-        "--output-format",
-        "stream-json",
-        "--model",
-        model,
-        "--permission-mode",
-        "bypassPermissions",
-    ]
-    if session_id:
-        command += ["--resume", session_id]
-    command.append(prompt)
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        cwd=workspace,
-        env=claude_environment(),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except TimeoutError:
-        process.kill()
-        raise
-    if process.returncode != 0:
-        raise RuntimeError(f"claude failed: {stderr.decode()[-400:]}")
-    new_session: str | None = None
-    result_text = ""
-    for line in stdout.decode().splitlines():
+class Seat:
+    def __init__(self) -> None:
+        self.websocket: Any = None
+        self.slot: int | None = None
+        self.turn: int = 0
+        self.painted: bool = False
+        self.board: list[dict[str, Any]] = []
+        self.observations: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    @property
+    def color(self) -> str:
+        return SEAT_COLORS[self.slot or 0]
+
+    async def reader(self) -> None:
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            if event.get("session_id"):
-                new_session = str(event["session_id"])
-            if event.get("type") == "result":
-                result_text = str(event.get("result", ""))
-    return new_session, result_text
+            async for raw in self.websocket:
+                payload = cast(dict[str, Any], json.loads(raw))
+                kind = payload.get("type")
+                if kind == "welcome":
+                    self.slot = int(payload["slot"])
+                elif kind == "board_update":
+                    self.board.append(payload["message"])
+                elif kind == "observation":
+                    for message in payload.get("messages", []):
+                        if message not in self.board:
+                            self.board.append(message)
+                    await self.observations.put(payload)
+                elif kind == "final":
+                    await self.observations.put(None)
+                    return
+        except websockets.ConnectionClosed:
+            await self.observations.put(None)
+
+
+seat = Seat()
+
+
+@tool(
+    "post_message",
+    "Post a message (max 240 chars) to the shared public board. All seats see it immediately.",
+    {"text": str},
+)
+async def post_message(args: dict[str, Any]) -> dict[str, Any]:
+    text = str(args.get("text", ""))[:240]
+    await seat.websocket.send(json.dumps({"type": "message", "turn": seat.turn, "text": text}))
+    return {"content": [{"type": "text", "text": "posted"}]}
+
+
+@tool(
+    "read_board",
+    "Read the latest shared board messages, including posts other seats made during this turn.",
+    {},
+)
+async def read_board(args: dict[str, Any]) -> dict[str, Any]:
+    tail = seat.board[-30:]
+    text = "\n".join(f"T{m['turn']} seat{m['slot']}: {m['text']}" for m in tail) or "(board is empty)"
+    return {"content": [{"type": "text", "text": text}]}
+
+
+@tool(
+    "paint_pixel",
+    "Submit your single pixel for this turn. This ends your turn. Use your seat color, or #FFFFFF to erase.",
+    {"x": int, "y": int, "color": str},
+)
+async def paint_pixel(args: dict[str, Any]) -> dict[str, Any]:
+    if seat.painted:
+        return {"content": [{"type": "text", "text": "you already painted this turn"}]}
+    try:
+        x, y = int(args["x"]), int(args["y"])
+    except (KeyError, TypeError, ValueError):
+        return {"content": [{"type": "text", "text": "x and y must be integers"}], "is_error": True}
+    color = str(args.get("color", seat.color)).upper()
+    if color != "#FFFFFF":
+        color = seat.color
+    await seat.websocket.send(
+        json.dumps({"turn": seat.turn, "message": "", "paint": {"x": x, "y": y, "color": color}})
+    )
+    seat.painted = True
+    return {
+        "content": [
+            {"type": "text", "text": f"submitted ({x},{y}) {color}; the turn resolves when all seats have painted"}
+        ]
+    }
+
+
+def briefing(observation: dict[str, Any], slot: int) -> str:
+    width, height = observation["width"], observation["height"]
+    rounds = int(observation.get("rounds", 1) or 1)
+    round_line = (
+        f"The episode has {rounds} rounds of {observation.get('turns_per_round')} turns. "
+        "At each round's end the score is logged and compared against other teams.\n"
+        if rounds > 1
+        else ""
+    )
+    return f"""You are agent {slot}, one of five agents in co/place, a cooperative pixel-art game. You share one
+{width}x{height} canvas (x right, y down) and must draw the target together. Target: {observation['target']}.
+Episode length: {observation['max_turns']} turns. {round_line}All seats act in the same turn. Each seat paints exactly
+one pixel per turn with the paint_pixel tool. If two seats paint the same pixel in the same turn, both writes are
+dropped. Your paint color is {SEAT_COLORS[slot]}; #FFFFFF erases. A black-box classifier scores the canvas after
+every turn; the team's recorded score is the BEST score ever reached; infer the classifier's behavior from deltas.
+
+How to play each turn:
+1. Use read_board to see what the other agents are saying right now.
+2. Talk with post_message: on your FIRST turn, introduce yourself ("I am agent {slot}...") and state your strategy.
+   In later turns, coordinate: claim coordinates, divide work, react to what others post this turn.
+3. Plan in your private workspace: keep a PLAN file, use python to compute exact coordinates.
+4. When coordination is clear, call paint_pixel EXACTLY ONCE, then end your reply. The game turn resolves only when
+   all five seats have painted, so do not stall forever - a few board posts, then paint.
+"""
+
+
+def observation_text(observation: dict[str, Any]) -> str:
+    width = observation["width"]
+    painted = [
+        f"{index % width},{index // width}:{color}"
+        for index, color in enumerate(observation["canvas"])
+        if color != "#FFFFFF"
+    ]
+    feedback = observation.get("image_model_feedback")
+    if feedback:
+        score_line = (
+            f"score {feedback['target_score']:.6f} (delta {feedback['score_delta']:+.6f}), "
+            f"rank {feedback['target_rank']}/{feedback.get('label_count', '?')}, "
+            f"top: {', '.join(p['label'] + ' ' + format(p['probability'], '.1%') for p in feedback['top_predictions'][:3])}"
+        )
+    else:
+        score_line = "unavailable"
+    return f"""Turn {observation['turn']} of {observation['max_turns']} (round {observation.get('round', 1)}/{observation.get('rounds', 1)}).
+Classifier: {score_line}
+Last turn accepted seats: {observation.get('previous_accepted_slots', [])}; collided: {observation.get('previous_collision_slots', [])}.
+Painted pixels: {'; '.join(painted) if painted else '(blank canvas)'}
+
+Your turn: read the board, coordinate, then call paint_pixel once."""
 
 
 async def main() -> None:
+    claude_environment()
     url = os.environ["COWORLD_PLAYER_WS_URL"]
     model = os.environ.get("AGENT_MODEL", "claude-sonnet-5")
     workspace = Path(os.environ.get("AGENT_WORKSPACE", "/tmp/agent-workspace")).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
-    timeout = float(os.environ.get("AGENT_TIMEOUT_SECONDS", "240"))
-    session_id: str | None = None
-    briefed = False
-    async with websockets.connect(url, max_size=None) as websocket:
-        slot: int | None = None
-        while True:
-            try:
-                pending = [await websocket.recv()]
-                while True:
-                    try:
-                        pending.append(await asyncio.wait_for(websocket.recv(), timeout=0.05))
-                    except asyncio.TimeoutError:
-                        break
-            except websockets.ConnectionClosed:
-                return
-            observation: dict[str, Any] | None = None
-            for raw_message in pending:
-                payload = cast(dict[str, Any], json.loads(raw_message))
-                if payload["type"] == "welcome":
-                    slot = int(payload["slot"])
-                elif payload["type"] == "final":
-                    return
-                elif payload["type"] == "observation":
-                    observation = payload
-            if observation is None or slot is None:
-                continue
+    turn_timeout = float(os.environ.get("AGENT_TIMEOUT_SECONDS", "240"))
 
-            prompt = observation_update(observation, slot)
-            if not briefed:
-                prompt = briefing(observation, slot) + "\n" + prompt
-            decision: dict[str, Any] | None = None
-            for attempt in range(2):
-                try:
-                    session_id, reply = await run_claude(
-                        prompt,
-                        model=model,
-                        workspace=workspace,
-                        session_id=session_id,
-                        timeout=timeout,
-                    )
-                    briefed = True
-                    decision = extract_last_action(reply)
-                    normalize_decision(decision)
-                    enforce_seat_color(decision, slot)
-                    validate_decision(decision, observation)
-                    break
-                except Exception as exc:
-                    decision = None
-                    print(f"agent attempt {attempt + 1}/2 failed on turn {observation['turn']}: {exc}", flush=True)
-            if decision is None:
-                continue
-            print(
-                json.dumps(
-                    {
-                        "event": "llm_action",
-                        "slot": slot,
-                        "turn": observation["turn"],
-                        "harness": "claude-code-session",
-                        "session": session_id,
-                    }
-                ),
-                flush=True,
+    async with websockets.connect(url, max_size=None) as websocket:
+        seat.websocket = websocket
+        reader = asyncio.create_task(seat.reader())
+        try:
+            first = await seat.observations.get()
+            if first is None or seat.slot is None:
+                return
+            game_server = create_sdk_mcp_server(
+                name="game", tools=[post_message, read_board, paint_pixel]
             )
-            decision["turn"] = observation["turn"]
-            await websocket.send(json.dumps(decision))
+            options = ClaudeAgentOptions(
+                system_prompt=briefing(first, seat.slot),
+                mcp_servers={"game": game_server},
+                allowed_tools=[
+                    "Bash",
+                    "Read",
+                    "Write",
+                    "Edit",
+                    "Glob",
+                    "Grep",
+                    "mcp__game__post_message",
+                    "mcp__game__read_board",
+                    "mcp__game__paint_pixel",
+                ],
+                permission_mode="bypassPermissions",
+                cwd=str(workspace),
+                model=model,
+                max_turns=30,
+            )
+            async with ClaudeSDKClient(options=options) as client:
+                observation: dict[str, Any] | None = first
+                while observation is not None:
+                    seat.turn = int(observation["turn"])
+                    seat.painted = False
+                    prompt = observation_text(observation)
+                    for nudge in range(3):
+                        try:
+                            await asyncio.wait_for(_run_query(client, prompt), timeout=turn_timeout)
+                        except (TimeoutError, asyncio.TimeoutError):
+                            print(f"turn {seat.turn}: agent query timed out", flush=True)
+                            break
+                        if seat.painted:
+                            break
+                        prompt = "You have not painted yet. Call paint_pixel now to end your turn."
+                    if seat.painted:
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "llm_action",
+                                    "slot": seat.slot,
+                                    "turn": seat.turn,
+                                    "harness": "claude-agent-sdk",
+                                }
+                            ),
+                            flush=True,
+                        )
+                    else:
+                        print(f"turn {seat.turn}: no paint submitted", flush=True)
+                    observation = await seat.observations.get()
+        finally:
+            reader.cancel()
+
+
+async def _run_query(client: ClaudeSDKClient, prompt: str) -> None:
+    await client.query(prompt)
+    async for _ in client.receive_response():
+        pass
 
 
 if __name__ == "__main__":

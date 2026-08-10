@@ -81,10 +81,34 @@ class PixelArtEngine:
         """0-based turn index within the current round."""
         return self.turn - (self.round - 1) * self.turns_per_round
 
+    def post_message(self, slot: int, text: str) -> bool:
+        """Post one board message immediately, outside the paint barrier."""
+        if self.done or not (0 <= slot < len(self.player_names)):
+            return False
+        if not isinstance(text, str):
+            return False
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return False
+        posted_this_turn = sum(
+            1 for m in self.messages if m["turn"] == self.turn and m["slot"] == slot
+        )
+        if posted_this_turn >= 8:
+            return False
+        self.messages.append(
+            {
+                "turn": self.turn,
+                "slot": slot,
+                "player": self.player_names[slot],
+                "text": text,
+            }
+        )
+        return True
+
     def parse_action(self, raw: Any) -> Action | None:
         if not isinstance(raw, dict):
             return None
-        message = raw.get("message")
+        message = raw.get("message", "")
         paint = raw.get("paint")
         if not isinstance(message, str) or not isinstance(paint, dict):
             return None

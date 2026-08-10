@@ -217,6 +217,24 @@ class TemplateTest(unittest.TestCase):
         self.assertIn("R1=0.0123", prompt)
         self.assertIn("A NEW ROUND is starting", prompt)
 
+    def test_live_board_posts_land_immediately_and_are_capped(self) -> None:
+        engine = PixelArtEngine(
+            width=8, height=8, max_turns=2, target="light bulb", player_names=["a", "b"]
+        )
+        self.assertTrue(engine.post_message(0, "I am agent 0, my strategy is outlines"))
+        self.assertFalse(engine.post_message(0, ""))
+        self.assertFalse(engine.post_message(9, "bad slot"))
+        self.assertFalse(engine.post_message(0, "x" * 241))
+        for i in range(7):
+            self.assertTrue(engine.post_message(0, f"post {i}"))
+        self.assertFalse(engine.post_message(0, "over the per-turn cap"))
+        self.assertTrue(engine.post_message(1, "other seats have their own cap"))
+        resolution = engine.resolve({0: {"paint": {"x": 1, "y": 1, "color": "#EF4444"}}})
+        turn_texts = [m["text"] for m in resolution["messages"]]
+        self.assertIn("I am agent 0, my strategy is outlines", turn_texts)
+        # paint without a bundled message is a valid action
+        self.assertEqual(resolution["accepted_slots"], [0])
+
     def test_white_is_an_eraser_and_other_colors_are_seat_locked(self) -> None:
         erase = action(1, 2, "#ffffff")
         enforce_seat_color(erase, 2)

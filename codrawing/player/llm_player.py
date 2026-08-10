@@ -270,6 +270,13 @@ def validate_decision(decision: dict[str, Any], observation: dict[str, Any]) -> 
         raise ValueError("color must use #RRGGBB")
 
 
+def normalize_decision(decision: dict[str, Any]) -> None:
+    """Repair recoverable model output instead of burning a retry on it."""
+    message = decision.get("message")
+    if isinstance(message, str) and len(message) > 240:
+        decision["message"] = message[:240]
+
+
 def enforce_seat_color(decision: dict[str, Any], slot: int) -> None:
     paint = decision.get("paint")
     if not isinstance(paint, dict):
@@ -323,10 +330,12 @@ async def main() -> None:
                         slot,
                     )
                     decision = extract_action(action)
+                    normalize_decision(decision)
                     enforce_seat_color(decision, slot)
                     validate_decision(decision, observation)
                     break
                 except Exception as exc:
+                    decision = None
                     model_error = exc
                     if attempt + 1 < max_attempts:
                         delay = 0.5 * (attempt + 1) + 0.15 * slot
@@ -353,9 +362,15 @@ async def main() -> None:
                     json.dumps({"event": "llm_action", "slot": slot, "turn": observation["turn"]}),
                     flush=True,
                 )
-            decision["turn"] = observation["turn"]
-            memory.remember_action(decision)
-            await websocket.send(json.dumps(decision))
+            try:
+                decision["turn"] = observation["turn"]
+                memory.remember_action(decision)
+                await websocket.send(json.dumps(decision))
+            except websockets.ConnectionClosed:
+                return
+            except Exception as exc:
+                # A malformed decision must cost one turn, never the process.
+                print(f"failed to submit decision on turn {observation['turn']}: {exc}", flush=True)
 
 
 if __name__ == "__main__":

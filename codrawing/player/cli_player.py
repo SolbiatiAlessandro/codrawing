@@ -19,6 +19,7 @@ from codrawing.player.llm_player import (
     AgentMemory,
     enforce_seat_color,
     extract_action,
+    normalize_decision,
     prompt_for,
     validate_decision,
 )
@@ -123,6 +124,7 @@ async def main() -> None:
                 try:
                     text = await call_cli(provider, model, prompt, timeout)
                     decision = extract_action(text)
+                    normalize_decision(decision)
                     enforce_seat_color(decision, slot)
                     validate_decision(decision, observation)
                     break

@@ -5,123 +5,287 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>co/place</title>
   <style>
-    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    body { margin: 0; background: #0b1020; color: #e5e7eb; }
-    main { display: grid; grid-template-columns: minmax(320px, 640px) minmax(260px, 1fr); gap: 24px; padding: 24px; }
-    h1, h2, p { margin: 0 0 12px; }
-    .card { background: #151b2d; border: 1px solid #2b354d; border-radius: 12px; padding: 16px; }
-    canvas { width: min(76vw, 640px); max-width: 100%; aspect-ratio: 1; background: white; image-rendering: pixelated; border: 1px solid #64748b; }
-    #messages { height: 420px; overflow: auto; font-size: 13px; line-height: 1.45; }
-    .message { border-bottom: 1px solid #283249; padding: 7px 0; }
-    button, input { font: inherit; }
-    button { background: #2563eb; color: white; border: 0; border-radius: 7px; padding: 8px 12px; cursor: pointer; }
-    #replay-controls { display: none; gap: 10px; align-items: center; margin-top: 12px; }
-    #timeline { flex: 1; }
-    .muted { color: #94a3b8; }
-    @media (max-width: 820px) { main { grid-template-columns: 1fr; } #messages { height: 220px; } }
+    :root { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+    body { margin: 0; background: #FAF7F0; color: #26221A; }
+    main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; display: flex; flex-direction: column; gap: 20px; }
+    .card { background: #FFFFFF; border: 1px solid #D8D2C4; border-radius: 8px; padding: 16px 18px; }
+    .card h2 { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 12px; border-bottom: 1px solid #E9E3D6; padding-bottom: 10px; }
+    header h1 { font-size: 22px; margin: 0 0 4px; }
+    header .sub { color: #7A7466; font-size: 13px; }
+    #feedback { font-size: 13px; margin-top: 6px; color: #7A7466; }
+    #feedback .pass { color: #15803D; font-weight: 700; }
+    #feedback .fail { color: #B91C1C; font-weight: 700; }
+    .canvasbox { overflow-x: auto; }
+    canvas#board { display: block; margin: 0 auto; background: #FFFFFF; }
+    .cardfoot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-top: 1px solid #E9E3D6; margin-top: 12px; padding-top: 10px; font-size: 12.5px; color: #7A7466; }
+    .controls { display: none; gap: 10px; align-items: center; margin-top: 14px; }
+    .controls button { font: inherit; color: #26221A; background: #FFFFFF; border: 1px solid #D8D2C4; border-radius: 4px; padding: 4px 14px; cursor: pointer; }
+    .controls button:hover { border-color: #7A7466; }
+    .controls input[type="range"] { flex: 1; accent-color: #B45309; }
+    .turnlabel { min-width: 80px; text-align: right; font-size: 13px; }
+    #chart { width: 100%; height: 150px; display: block; }
+    #messages { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 9px; font-size: 13px; line-height: 1.5; }
+    .msg { display: flex; gap: 9px; align-items: baseline; }
+    .chip { flex: none; width: 10px; height: 10px; border-radius: 2px; transform: translateY(1px); background: #7A7466; }
+    .msg .who { color: #7A7466; flex: none; }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-top: 12px; font-size: 13px; }
+    .toolbar button { font: inherit; color: #26221A; background: #FFFFFF; border: 1px solid #D8D2C4; border-radius: 4px; padding: 4px 14px; cursor: pointer; }
+    #status { color: #7A7466; }
   </style>
 </head>
 <body>
 <main>
-  <section class="card">
+  <header>
     <h1>co/place</h1>
-    <p>Target: <strong id="target">—</strong> · Turn <span id="turn">0</span>/<span id="max-turns">0</span></p>
-    <p id="model-feedback" class="muted">Image-model feedback: waiting…</p>
-    <canvas id="canvas" width="24" height="24"></canvas>
-    <div id="replay-controls">
+    <div class="sub">Target: <strong id="target">&mdash;</strong> &middot; Turn <span id="turn">0</span>/<span id="max-turns">0</span></div>
+    <div id="feedback">waiting for classifier&hellip;</div>
+  </header>
+
+  <section class="card">
+    <h2 id="canvastitle">Canvas</h2>
+    <div class="canvasbox"><canvas id="board"></canvas></div>
+    <div class="controls" id="replay-controls">
       <button id="play">Pause</button>
       <input id="timeline" type="range" min="0" max="0" value="0">
+      <span class="turnlabel" id="framelabel"></span>
     </div>
-    <p style="margin-top:12px"><button id="download">Download PNG</button> <span id="status" class="muted">Connecting…</span></p>
+    <div class="cardfoot"><span id="lastaction">&mdash;</span><span id="framestamp"></span></div>
+    <div class="toolbar"><button id="download">Download PNG</button><span id="status">Connecting&hellip;</span></div>
   </section>
-  <aside class="card">
+
+  <section class="card">
+    <h2>Score over the session</h2>
+    <canvas id="chart"></canvas>
+  </section>
+
+  <section class="card">
     <h2>Public board</h2>
     <div id="messages"></div>
-  </aside>
+  </section>
 </main>
 <script>
-  const canvas = document.querySelector('#canvas');
-  const ctx = canvas.getContext('2d');
+  const SEAT_COLORS = ['#EF4444', '#3B82F6', '#22C55E', '#F59E0B', '#A855F7'];
+  const WHITE = '#FFFFFF';
+  const board = document.querySelector('#board');
+  const boardCtx = board.getContext('2d');
+  const chart = document.querySelector('#chart');
   const messages = document.querySelector('#messages');
   const status = document.querySelector('#status');
   const controls = document.querySelector('#replay-controls');
   const timeline = document.querySelector('#timeline');
   const playButton = document.querySelector('#play');
-  let frames = [], frameIndex = 0, playing = true, timer = null, seenMessages = [];
+  let frames = [], frameIndex = 0, playing = true, timer = null;
+  let liveMessages = [], liveScores = [];
 
-  function draw(frame, messageList = null) {
-    canvas.width = frame.width;
-    canvas.height = frame.height;
-    frame.canvas.forEach((color, i) => {
-      ctx.fillStyle = color;
-      ctx.fillRect(i % frame.width, Math.floor(i / frame.width), 1, 1);
-    });
-    document.querySelector('#target').textContent = frame.target;
-    document.querySelector('#turn').textContent = frame.turn;
-    document.querySelector('#max-turns').textContent = frame.max_turns;
-    const feedback = frame.image_model_feedback;
-    document.querySelector('#model-feedback').textContent = feedback
-      ? `${feedback.passing ? 'PASSING' : 'NOT PASSING'} · ` +
-        `${feedback.model} target score ${(100 * feedback.target_score).toFixed(3)}% ` +
-        `(need >${(100 * feedback.pass_threshold).toFixed(0)}%) · ` +
-        `Δ ${(100 * feedback.score_delta).toFixed(3)}% · ` +
-        `${feedback.best_target_label} rank ${feedback.target_rank}`
-      : 'Image-model feedback: unavailable';
-    if (messageList) seenMessages = messageList;
-    else if (frame.messages) seenMessages.push(...frame.messages);
-    messages.innerHTML = seenMessages.map(m =>
-      `<div class="message"><span class="muted">T${m.turn} · ${escapeHtml(m.player)}</span><br>${escapeHtml(m.text)}</div>`
-    ).join('');
-    messages.scrollTop = messages.scrollHeight;
-    status.textContent = frame.done ? 'Episode complete' : 'Live';
-  }
-
-  function escapeHtml(value) {
+  function esc(value) {
     const node = document.createElement('div'); node.textContent = value; return node.innerHTML;
   }
 
-  function showReplayFrame(index) {
-    frameIndex = Number(index);
-    const history = frames.slice(0, frameIndex + 1).flatMap(frame => frame.messages || []);
-    draw(frames[frameIndex], history);
-    timeline.value = frameIndex;
+  function drawBoard(frame, previous) {
+    const cell = Math.max(8, Math.min(22, Math.floor(560 / frame.width)));
+    const size = { w: frame.width * cell + 1, h: frame.height * cell + 1 };
+    const scale = window.devicePixelRatio || 1;
+    board.width = size.w * scale; board.height = size.h * scale;
+    board.style.width = size.w + 'px'; board.style.height = size.h + 'px';
+    boardCtx.setTransform(scale, 0, 0, scale, 0, 0);
+    boardCtx.clearRect(0, 0, size.w, size.h);
+    boardCtx.fillStyle = '#FFFFFF';
+    boardCtx.fillRect(0, 0, size.w, size.h);
+    boardCtx.strokeStyle = '#E9E3D6';
+    boardCtx.lineWidth = 1;
+    for (let x = 0; x <= frame.width; x++) {
+      boardCtx.beginPath(); boardCtx.moveTo(x * cell + 0.5, 0); boardCtx.lineTo(x * cell + 0.5, size.h); boardCtx.stroke();
+    }
+    for (let y = 0; y <= frame.height; y++) {
+      boardCtx.beginPath(); boardCtx.moveTo(0, y * cell + 0.5); boardCtx.lineTo(size.w, y * cell + 0.5); boardCtx.stroke();
+    }
+    const changed = [];
+    for (let i = 0; i < frame.canvas.length; i++) {
+      const color = frame.canvas[i];
+      const x = i % frame.width, y = Math.floor(i / frame.width);
+      if (color !== WHITE) {
+        boardCtx.fillStyle = color;
+        boardCtx.fillRect(x * cell + 2, y * cell + 2, cell - 3, cell - 3);
+      }
+      if (previous && previous.canvas[i] !== color) changed.push(i);
+    }
+    boardCtx.strokeStyle = '#26221A';
+    boardCtx.lineWidth = 2;
+    for (const i of changed) {
+      const x = i % frame.width, y = Math.floor(i / frame.width);
+      boardCtx.strokeRect(x * cell + 1.5, y * cell + 1.5, cell - 2, cell - 2);
+    }
+    const names = frame.player_names || [];
+    const acts = changed.map(i => {
+      const owner = frame.owners ? frame.owners[i] : null;
+      const who = owner === null || owner === undefined || owner < 0 ? 'someone' : (names[owner] || 'seat ' + owner);
+      const verb = frame.canvas[i] === WHITE ? 'erased' : 'painted';
+      return who + ' ' + verb + ' (' + (i % frame.width) + ',' + Math.floor(i / frame.width) + ')';
+    });
+    document.querySelector('#lastaction').textContent = acts.length ? acts.join(' · ') : 'no accepted writes this turn';
+    document.querySelector('#canvastitle').textContent = 'Canvas (' + frame.width + '×' + frame.height + ')';
   }
 
-  function startReplay() {
+  function drawChart(scores, threshold, currentIndex) {
+    const scale = window.devicePixelRatio || 1;
+    const w = chart.clientWidth || 900, h = 150;
+    chart.width = w * scale; chart.height = h * scale;
+    chart.style.height = h + 'px';
+    const ctx = chart.getContext('2d');
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const pad = { l: 44, r: 14, t: 12, b: 18 };
+    const plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
+    const max = Math.max(0.05, threshold || 0, ...scores);
+    const x = i => pad.l + (scores.length > 1 ? (i / (scores.length - 1)) * plotW : plotW / 2);
+    const y = v => pad.t + plotH - (v / max) * plotH;
+    ctx.font = '11px ui-monospace, Menlo, monospace';
+    ctx.fillStyle = '#7A7466';
+    ctx.strokeStyle = '#E9E3D6';
+    for (const frac of [0, 0.5, 1]) {
+      const v = max * frac;
+      ctx.beginPath(); ctx.moveTo(pad.l, y(v)); ctx.lineTo(w - pad.r, y(v)); ctx.stroke();
+      ctx.fillText(Math.round(100 * v) + '%', 6, y(v) + 4);
+    }
+    if (threshold) {
+      ctx.strokeStyle = '#7A7466';
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.moveTo(pad.l, y(threshold)); ctx.lineTo(w - pad.r, y(threshold)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillText('pass ' + Math.round(100 * threshold) + '%', pad.l + 4, y(threshold) - 5);
+    }
+    if (!scores.length) return;
+    ctx.strokeStyle = '#B45309';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    scores.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+    ctx.stroke();
+    const i = currentIndex === undefined ? scores.length - 1 : currentIndex;
+    ctx.fillStyle = '#B45309';
+    ctx.beginPath(); ctx.arc(x(i), y(scores[i]), 4, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillText((100 * scores[i]).toFixed(1) + '%', Math.min(x(i) + 8, w - 52), y(scores[i]) - 8);
+  }
+
+  function renderMessages(list) {
+    messages.innerHTML = list.map(m =>
+      '<div class="msg"><span class="chip" style="background:' + (SEAT_COLORS[m.slot] || '#7A7466') + '"></span>' +
+      '<span class="who">T' + m.turn + ' · ' + esc(m.player) + '</span><span>' + esc(m.text) + '</span></div>'
+    ).join('') || '<span style="color:#7A7466">(no messages yet)</span>';
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function renderFeedback(feedback) {
+    const el = document.querySelector('#feedback');
+    if (!feedback) { el.textContent = 'Image-model feedback: unavailable'; return; }
+    el.innerHTML =
+      '<span class="' + (feedback.passing ? 'pass' : 'fail') + '">' + (feedback.passing ? 'PASSING' : 'NOT PASSING') + '</span>' +
+      ' · ' + esc(feedback.model) + ' score <strong>' + (100 * feedback.target_score).toFixed(3) + '%</strong>' +
+      ' (need &gt;' + (100 * feedback.pass_threshold).toFixed(0) + '%)' +
+      ' · Δ ' + (100 * feedback.score_delta).toFixed(3) + '%' +
+      ' · ' + esc(feedback.best_target_label || '') + ' rank ' + feedback.target_rank +
+      (feedback.label_count ? '/' + feedback.label_count : '');
+  }
+
+  function showFrame(frame, previous, messageList, scores, scoreIndex) {
+    document.querySelector('#target').textContent = frame.target;
+    document.querySelector('#turn').textContent = frame.turn;
+    document.querySelector('#max-turns').textContent = frame.max_turns;
+    drawBoard(frame, previous);
+    renderFeedback(frame.image_model_feedback);
+    renderMessages(messageList);
+    drawChart(scores, frame.image_model_feedback ? frame.image_model_feedback.pass_threshold : 0, scoreIndex);
+  }
+
+  function replayScores() {
+    return frames.map(f => (f.image_model_feedback ? f.image_model_feedback.target_score : 0));
+  }
+
+  function showReplayFrame(index) {
+    frameIndex = Math.max(0, Math.min(frames.length - 1, Number(index)));
+    const frame = frames[frameIndex];
+    const previous = frameIndex > 0 ? frames[frameIndex - 1] : null;
+    const history = frames.slice(0, frameIndex + 1).flatMap(f => f.messages || []);
+    showFrame(frame, previous, history, replayScores(), frameIndex);
+    timeline.value = frameIndex;
+    document.querySelector('#framelabel').textContent = 'frame ' + (frameIndex + 1) + '/' + frames.length;
+    document.querySelector('#framestamp').textContent = 'replay';
+    status.textContent = 'Replay loaded';
+  }
+
+  function loadReplay(payload) {
+    frames = payload.frames || [];
+    if (!frames.length) { status.textContent = 'Replay has no frames'; return; }
+    controls.style.display = 'flex';
+    timeline.max = frames.length - 1;
+    showReplayFrame(0);
     clearInterval(timer);
     timer = setInterval(() => {
       if (!playing || !frames.length) return;
       showReplayFrame((frameIndex + 1) % frames.length);
-    }, 250);
+    }, 300);
   }
 
+  let previousLiveFrame = null;
+  function handleLive(payload) {
+    if (payload.messages) liveMessages.push(...payload.messages);
+    if (payload.image_model_feedback) liveScores.push(payload.image_model_feedback.target_score);
+    showFrame(payload, previousLiveFrame, liveMessages, liveScores);
+    previousLiveFrame = payload;
+    document.querySelector('#framestamp').textContent = payload.done ? 'episode complete' : 'live';
+    status.textContent = payload.done ? 'Episode complete' : 'Live';
+  }
+
+  const params = new URLSearchParams(location.search);
+  const replayUri = params.get('replay_uri');
   const replayMode = location.pathname.endsWith('/replay');
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const suppliedAddress = new URLSearchParams(location.search).get('address');
-  const defaultAddress = `${protocol}//${location.host}/${replayMode ? 'replay' : 'global'}`;
-  const socket = new WebSocket(suppliedAddress || defaultAddress);
-  socket.onopen = () => status.textContent = replayMode ? 'Loading replay…' : 'Live';
-  socket.onerror = () => status.textContent = 'Connection failed';
-  socket.onmessage = event => {
-    const payload = JSON.parse(event.data);
-    if (payload.type === 'replay') {
-      frames = payload.frames;
-      if (!frames.length) { status.textContent = 'Replay has no frames'; return; }
-      controls.style.display = 'flex';
-      timeline.max = frames.length - 1;
-      showReplayFrame(0);
-      startReplay();
-    } else draw(payload);
-  };
+
+  if (replayUri) {
+    status.textContent = 'Fetching replay…';
+    fetch(replayUri)
+      .then(async response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        if (/\.(z|gz)$/.test(new URL(replayUri, location.href).pathname)) {
+          const format = replayUri.endsWith('.gz') ? 'gzip' : 'deflate';
+          const stream = response.body.pipeThrough(new DecompressionStream(format));
+          return new Response(stream).json();
+        }
+        return response.json();
+      })
+      .then(loadReplay)
+      .catch(error => { status.textContent = 'Failed to load replay: ' + error.message; });
+  } else {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const suppliedAddress = params.get('address');
+    const defaultAddress = protocol + '//' + location.host + '/' + (replayMode ? 'replay' : 'global');
+    const socket = new WebSocket(suppliedAddress || defaultAddress);
+    socket.onopen = () => { status.textContent = replayMode ? 'Loading replay…' : 'Live'; };
+    socket.onerror = () => { status.textContent = 'Connection failed'; };
+    socket.onmessage = event => {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'replay') loadReplay(payload);
+      else handleLive(payload);
+    };
+  }
 
   timeline.addEventListener('input', () => { playing = false; playButton.textContent = 'Play'; showReplayFrame(timeline.value); });
   playButton.addEventListener('click', () => { playing = !playing; playButton.textContent = playing ? 'Pause' : 'Play'; });
   document.querySelector('#download').addEventListener('click', () => {
-    const output = document.createElement('canvas'); output.width = canvas.width * 24; output.height = canvas.height * 24;
-    const outputContext = output.getContext('2d'); outputContext.imageSmoothingEnabled = false;
-    outputContext.drawImage(canvas, 0, 0, output.width, output.height);
-    const link = document.createElement('a'); link.download = `coplace-${document.querySelector('#target').textContent}.png`;
-    link.href = output.toDataURL('image/png'); link.click();
+    const frame = frames.length ? frames[frameIndex] : previousLiveFrame;
+    if (!frame) return;
+    const cell = 24;
+    const output = document.createElement('canvas');
+    output.width = frame.width * cell; output.height = frame.height * cell;
+    const ctx = output.getContext('2d');
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, output.width, output.height);
+    frame.canvas.forEach((color, i) => {
+      if (color === WHITE) return;
+      ctx.fillStyle = color;
+      ctx.fillRect((i % frame.width) * cell, Math.floor(i / frame.width) * cell, cell, cell);
+    });
+    const link = document.createElement('a');
+    link.download = 'coplace-' + frame.target + '.png';
+    link.href = output.toDataURL('image/png');
+    link.click();
   });
 </script>
 </body>

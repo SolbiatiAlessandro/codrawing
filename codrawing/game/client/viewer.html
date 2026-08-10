@@ -221,8 +221,13 @@
     clearInterval(timer);
     timer = setInterval(() => {
       if (!playing || !frames.length) return;
-      showReplayFrame((frameIndex + 1) % frames.length);
-    }, 300);
+      if (frameIndex >= frames.length - 1) {
+        playing = false;
+        playButton.textContent = 'Replay';
+        return;
+      }
+      showReplayFrame(frameIndex + 1);
+    }, 400);
   }
 
   let previousLiveFrame = null;
@@ -269,7 +274,11 @@
   }
 
   timeline.addEventListener('input', () => { playing = false; playButton.textContent = 'Play'; showReplayFrame(timeline.value); });
-  playButton.addEventListener('click', () => { playing = !playing; playButton.textContent = playing ? 'Pause' : 'Play'; });
+  playButton.addEventListener('click', () => {
+    if (!playing && frames.length && frameIndex >= frames.length - 1) showReplayFrame(0);
+    playing = !playing;
+    playButton.textContent = playing ? 'Pause' : 'Play';
+  });
   document.querySelector('#download').addEventListener('click', () => {
     const frame = frames.length ? frames[frameIndex] : previousLiveFrame;
     if (!frame) return;

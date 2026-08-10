@@ -236,7 +236,8 @@
   }
 
   const params = new URLSearchParams(location.search);
-  const replayUri = params.get('replay_uri');
+  // Observatory static replay viewers receive the replay URL as ?replay=.
+  const replayUri = params.get('replay') || params.get('replay_uri');
   const replayMode = location.pathname.endsWith('/replay');
 
   if (replayUri) {

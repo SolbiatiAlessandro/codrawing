@@ -48,7 +48,7 @@
 <main>
   <header>
     <h1>co/place</h1>
-    <span class="sub">Target: <strong id="target">&mdash;</strong> &middot; Turn <span id="turn">0</span>/<span id="max-turns">0</span> &middot; <span id="status">Connecting&hellip;</span></span>
+    <span class="sub">Target: <strong id="target">&mdash;</strong> &middot; <span id="roundlabel"></span>Turn <span id="turn">0</span>/<span id="max-turns">0</span> &middot; <span id="status">Connecting&hellip;</span></span>
     <div id="feedback">waiting for classifier&hellip;</div>
   </header>
 
@@ -175,7 +175,7 @@
     document.querySelector('#canvastitle').textContent = 'Canvas ' + frame.width + '×' + frame.height;
   }
 
-  function drawSpark(scores, threshold, currentIndex) {
+  function drawSpark(scores, threshold, currentIndex, turnsPerRound) {
     const scale = window.devicePixelRatio || 1;
     const w = spark.clientWidth || 500, h = 54;
     spark.width = w * scale; spark.height = h * scale;
@@ -189,6 +189,12 @@
     const x = i => pad.l + (scores.length > 1 ? (i / (scores.length - 1)) * plotW : plotW / 2);
     const y = v => pad.t + plotH - (v / max) * plotH;
     ctx.font = '10px ui-monospace, Menlo, monospace';
+    if (turnsPerRound && turnsPerRound < scores.length - 1) {
+      ctx.strokeStyle = '#EFE9DC';
+      for (let t = turnsPerRound; t < scores.length - 1; t += turnsPerRound) {
+        ctx.beginPath(); ctx.moveTo(x(t), pad.t); ctx.lineTo(x(t), pad.t + plotH); ctx.stroke();
+      }
+    }
     if (threshold && threshold <= max) {
       ctx.strokeStyle = '#B0A896';
       ctx.setLineDash([4, 4]);
@@ -222,10 +228,12 @@
     document.querySelector('#target').textContent = frame.target;
     document.querySelector('#turn').textContent = frame.turn;
     document.querySelector('#max-turns').textContent = frame.max_turns;
+    document.querySelector('#roundlabel').textContent =
+      frame.rounds > 1 ? 'Round ' + frame.round + '/' + frame.rounds + ' · ' : '';
     drawBoard(frame, previous);
     renderFeedback(frame.image_model_feedback);
     renderBubbles(frame);
-    drawSpark(scores, frame.image_model_feedback ? frame.image_model_feedback.pass_threshold : 0, scoreIndex);
+    drawSpark(scores, frame.image_model_feedback ? frame.image_model_feedback.pass_threshold : 0, scoreIndex, frame.turns_per_round);
   }
 
   function replayScores() {

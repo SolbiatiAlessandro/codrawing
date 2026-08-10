@@ -175,7 +175,47 @@ class TemplateTest(unittest.TestCase):
         memory.observe(observation, slot)
         prompt = prompt_for(observation, slot, memory)
         self.assertIn("accepted; simultaneous team score delta -0.00100000", prompt)
-        self.assertIn("erase one of your own harmful pixels with #FFFFFF", prompt)
+        self.assertIn("erase that exact pixel with #FFFFFF", prompt)
+
+    def test_rounds_partition_turns_and_appear_in_snapshots(self) -> None:
+        engine = PixelArtEngine(
+            width=8,
+            height=8,
+            max_turns=6,
+            target="light bulb",
+            player_names=["a", "b"],
+            turns_per_round=2,
+        )
+        self.assertEqual(engine.rounds, 3)
+        self.assertEqual((engine.round, engine.round_turn), (1, 0))
+        for expected_round in (1, 1, 2, 2, 3, 3):
+            self.assertEqual(engine.round, expected_round)
+            engine.resolve({})
+        self.assertTrue(engine.done)
+        self.assertEqual(engine.round, 3)
+        snapshot = engine.snapshot()
+        self.assertEqual(snapshot["rounds"], 3)
+        self.assertEqual(snapshot["turns_per_round"], 2)
+
+    def test_round_prompt_includes_regroup_cue_and_round_log(self) -> None:
+        observation = {
+            "width": 8,
+            "height": 8,
+            "canvas": ["#FFFFFF"] * 64,
+            "recent_messages": [],
+            "target": "light bulb",
+            "turn": 10,
+            "max_turns": 100,
+            "rounds": 10,
+            "round": 2,
+            "round_turn": 0,
+            "turns_per_round": 10,
+            "round_scores": [0.0123],
+        }
+        prompt = prompt_for(observation, 0)
+        self.assertIn("Round 2 of 10", prompt)
+        self.assertIn("R1=0.0123", prompt)
+        self.assertIn("A NEW ROUND is starting", prompt)
 
     def test_white_is_an_eraser_and_other_colors_are_seat_locked(self) -> None:
         erase = action(1, 2, "#ffffff")

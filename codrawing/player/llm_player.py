@@ -112,22 +112,54 @@ recognizable drawing or chase unrelated labels."""
         image_model_feedback = """Shared image-model feedback: unavailable in this run.
 The team's recorded score is the best classifier score reached during the episode."""
     memory_summary = memory.prompt_summary() if memory else "Private experimental memory: none yet."
+    quickdraw_scorer = bool(feedback) and str(feedback.get("model", "")).startswith("quickdraw")
+    scorer_knowledge = """How the scorer works (exploit this):
+- It ignores color. It crops the bounding box of ALL non-white pixels, rescales that crop into a 28x28 mask, and
+  compares it against averaged human SKETCHES of each class. Consequences:
+  * One stray pixel far from the drawing stretches the crop and warps the whole shape. Strays are the most harmful
+    pixels on the board - erase them (your own with #FFFFFF) or ask their owner to.
+  * Human sketches are thin OUTLINES. A sparse outline of the target scores far better than solid filled regions.
+    Winning canvases are about 15-20% filled inside their bounding box; dense blobs score near zero.
+  * Radiating spokes around a round shape make it read as "sun". Never draw rays.
+- A strong light-bulb sketch, in canvas terms: a round glass OUTLINE (roughly a circle of radius ~6 centered near
+  (12,9)), a short narrow neck below it (two vertical strokes around x=9..10 and x=14..15 at y=14..17), and one or two
+  short horizontal base bars under the neck (y=17..19). No fill inside the glass, no rays, nothing outside this
+  region."""
+    if not quickdraw_scorer:
+        scorer_knowledge = ""
     score_protocol = f"""Every turn, first assess what has happened so far: the score history, the outcome of your last
 action, and what the other agents said and painted. You cannot draw a recognizable {observation['target']} by yourself
-with one pixel per turn - the only way to score is to collaborate with the other LLM agents. Build on their work,
-announce your intent on the public board, follow through on agreements, and avoid coordinates others have claimed.
+with one pixel per turn - the only way to score is to collaborate with the other LLM agents.
+PLAN FIRST: on the first turns, converge on ONE shared shape plan on the public board (which outline, where its parts
+go), then execute it together for the rest of the episode. Once a plan exists, do not restate or renegotiate it -
+place your pixel where the plan needs it most and say which plan segment you advanced.
 All five seats act SIMULTANEOUSLY: if two or more seats paint the same pixel in the same turn, all of those writes are
 dropped. The other seats see the same observation you do and will reach for the same obvious pixel, so never pick the
 single most obvious next pixel unless the board shows it is yours: derive a distinct choice from your seat number
-(for example, work on the part of the shape you would get by splitting the remaining work five ways and taking share
-{slot}), and claim your next coordinate in your message so the others can route around you.
-Retain strategies whose score deltas are positive; do not repeat a strategy through consecutive negative deltas. You
-may erase one of your own harmful pixels with #FFFFFF. Your public message must cite the signed score delta and state
-the experiment you are performing."""
+(for example, take the plan segment closest to share {slot} of 5), and claim your next coordinate in your message so
+the others can route around you.
+PROTECT GAINS: the recorded score is the best EVER reached, but wasted turns are gone forever. If the score dropped
+right after your accepted write, erase that exact pixel with #FFFFFF next turn instead of adding more. Prefer
+completing the agreed outline over decorating it; when the outline is complete, thicken it stroke by stroke rather
+than filling it. Your public message must cite the signed score delta and state which plan segment you advanced."""
+    rounds = int(observation.get("rounds", 1) or 1)
+    if rounds > 1:
+        round_scores = observation.get("round_scores") or []
+        history = ", ".join(f"R{i + 1}={score:.4f}" for i, score in enumerate(round_scores)) or "none yet"
+        round_context = f"""Round {observation['round']} of {rounds}; turn {observation['round_turn']} of {observation['turns_per_round']} in this round.
+At the end of every round the score is LOGGED and compared against other teams: round scores so far: {history}.
+"""
+        if observation.get("round_turn") == 0 and observation.get("round", 1) > 1:
+            round_context += """A NEW ROUND is starting: regroup before you act. Reassess the whole canvas against the plan, judge what last
+round's log proved or disproved, and state in your message what the team should do differently this round.
+"""
+    else:
+        round_context = ""
     return f"""You are artist seat {slot} in a five-agent collaborative pixel-art game.
 Shared target: {observation['target']}
 Canvas: {width}x{height}; x grows right, y grows down; valid x=0..{width - 1}, y=0..{height - 1}.
 Turn: {observation['turn']} of {observation['max_turns']}.
+{round_context}
 Your assigned paint color is {SEAT_COLORS[slot]}. Use exactly this color for paint; #FFFFFF is allowed only to erase
 a prior harmful pixel.
 Painted pixels as x,y:#RRGGBB (all omitted pixels are white):
@@ -136,6 +168,8 @@ Recent public board:
 {messages}
 
 {image_model_feedback}
+
+{scorer_knowledge}
 
 {memory_summary}
 

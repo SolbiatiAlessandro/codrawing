@@ -58,7 +58,8 @@ class WorkflowHelpersTest(unittest.TestCase):
                 request["game_config_overrides"]["player_connect_timeout_seconds"],
                 120,
             )
-            self.assertEqual(request["game_config_overrides"]["action_timeout_seconds"], 60)
+            self.assertEqual(request["game_config_overrides"]["action_timeout_seconds"], 120)
+            self.assertEqual(request["game_config_overrides"]["turns_per_round"], 10)
             self.assertEqual(request["variant_id"], "human-review")
 
     def test_xp_request_routes_light_bulb_to_its_variant(self) -> None:

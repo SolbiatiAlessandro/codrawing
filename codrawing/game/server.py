@@ -111,6 +111,7 @@ class GameRuntime:
         self.image_model: TargetScorerRouter | None = scorer_from_environment() if TOKENS else None
         self.image_model_feedback: dict[str, Any] | None = None
         self.image_model_score_trace: list[dict[str, Any]] = []
+        self.round_scores: list[float] = []
         episode_seed = CONFIG.get("seed")
         if TOKENS and episode_seed is None:
             episode_seed = secrets.randbits(63)
@@ -122,6 +123,9 @@ class GameRuntime:
                 max_turns=int(CONFIG["max_turns"]),
                 target=choose_target(CONFIG["targets"], episode_seed),
                 player_names=PLAYER_NAMES,
+                turns_per_round=(
+                    int(CONFIG["turns_per_round"]) if CONFIG.get("turns_per_round") else None
+                ),
             )
             if TOKENS
             else None
@@ -158,6 +162,7 @@ class GameRuntime:
         snapshot = self.engine.snapshot(turn_messages=turn_messages)
         if self.image_model_feedback is not None:
             snapshot["image_model_feedback"] = self.image_model_feedback.copy()
+        snapshot["round_scores"] = self.round_scores.copy()
         return snapshot
 
 
@@ -246,7 +251,9 @@ async def player(websocket: WebSocket) -> None:
             if raw.get("turn") != engine.turn or slot in runtime.pending_actions:
                 continue
             runtime.pending_actions[slot] = raw
-            if len(runtime.pending_actions) == len(TOKENS):
+            # Barrier: the turn resolves once every currently connected player
+            # has submitted, so per-agent latency never costs anyone a write.
+            if len(runtime.pending_actions) >= max(1, len(runtime.players)):
                 runtime.action_event.set()
     finally:
         if runtime.players.get(slot) is websocket:
@@ -276,6 +283,10 @@ async def _play_game() -> None:
         resolution = engine.resolve(runtime.pending_actions)
         runtime.last_resolution = resolution
         runtime.score_canvas()
+        if runtime.image_model_feedback is not None and (
+            engine.turn % engine.turns_per_round == 0 or engine.done
+        ):
+            runtime.round_scores.append(float(runtime.image_model_feedback["target_score"]))
         snapshot = runtime.snapshot(turn_messages=resolution["messages"])
         snapshot["accepted_slots"] = resolution["accepted_slots"]
         snapshot["collision_slots"] = resolution["collision_slots"]
@@ -293,6 +304,7 @@ async def _play_game() -> None:
         threshold = float(runtime.image_model_feedback["pass_threshold"])
         results["scores"] = [best_score] * len(engine.player_names)
         results["best_target_score"] = best_score
+        results["round_scores"] = runtime.round_scores.copy()
         results["image_model"] = runtime.image_model_feedback["model"]
         results["evaluation_threshold"] = threshold
         results["evaluation_passed"] = best_score > threshold

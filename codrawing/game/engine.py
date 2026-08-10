@@ -43,14 +43,18 @@ class PixelArtEngine:
         max_turns: int,
         target: str,
         player_names: list[str],
+        turns_per_round: int | None = None,
     ) -> None:
         if width < 1 or height < 1 or max_turns < 1:
             raise ValueError("width, height, and max_turns must be positive")
         if not player_names:
             raise ValueError("at least one player is required")
+        if turns_per_round is not None and turns_per_round < 1:
+            raise ValueError("turns_per_round must be positive")
         self.width = width
         self.height = height
         self.max_turns = max_turns
+        self.turns_per_round = turns_per_round or max_turns
         self.target = target
         self.player_names = player_names.copy()
         self.turn = 0
@@ -62,6 +66,20 @@ class PixelArtEngine:
     @property
     def done(self) -> bool:
         return self.turn >= self.max_turns
+
+    @property
+    def rounds(self) -> int:
+        return -(-self.max_turns // self.turns_per_round)
+
+    @property
+    def round(self) -> int:
+        """1-based round of the current turn (clamped to the last round when done)."""
+        return min(self.turn // self.turns_per_round, self.rounds - 1) + 1
+
+    @property
+    def round_turn(self) -> int:
+        """0-based turn index within the current round."""
+        return self.turn - (self.round - 1) * self.turns_per_round
 
     def parse_action(self, raw: Any) -> Action | None:
         if not isinstance(raw, dict):
@@ -136,6 +154,10 @@ class PixelArtEngine:
             "target": self.target,
             "turn": self.turn,
             "max_turns": self.max_turns,
+            "turns_per_round": self.turns_per_round,
+            "rounds": self.rounds,
+            "round": self.round,
+            "round_turn": self.round_turn,
             "canvas": self.canvas.copy(),
             "owners": self.owners.copy(),
             "accepted_pixels": self.accepted_pixels.copy(),

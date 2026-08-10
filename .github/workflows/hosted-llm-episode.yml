@@ -11,7 +11,12 @@ on:
       turns:
         description: Number of drawing turns
         required: true
-        default: "50"
+        default: "100"
+        type: string
+      turns_per_round:
+        description: Turns per round (round scores are logged for the leaderboard)
+        required: true
+        default: "10"
         type: string
       target:
         description: Image target
@@ -115,7 +120,8 @@ jobs:
             hosted-artifacts/xp-request.json \
             "${{ inputs.turns }}" \
             "${{ inputs.target }}" \
-            "codrawing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            "codrawing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "${{ inputs.turns_per_round }}"
 
           coworld xp-request create hosted-artifacts/xp-request.json --json \
             | tee hosted-artifacts/xp-created.json

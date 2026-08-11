@@ -14,4 +14,4 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["codrawing"]
+packages = ["codrawing", "permanent_coworld"]

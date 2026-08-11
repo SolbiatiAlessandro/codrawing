@@ -6,6 +6,14 @@ from collections.abc import Iterable
 Pixel = tuple[int, int, str]
 
 
+def _ring(cx: float, cy: float, r: float, color: str, points: int = 64) -> Iterable[Pixel]:
+    import math
+
+    for step in range(points):
+        angle = 2 * math.pi * step / points
+        yield round(cx + r * math.cos(angle)), round(cy + r * math.sin(angle)), color
+
+
 def _ellipse(cx: float, cy: float, rx: float, ry: float, color: str) -> Iterable[Pixel]:
     left, right = int(cx - rx), int(cx + rx)
     top, bottom = int(cy - ry), int(cy + ry)
@@ -36,7 +44,15 @@ def make_template(target: str, width: int, height: int) -> list[Pixel]:
         for x, y, color in pixels:
             yield min(width - 1, int(x * sx)), min(height - 1, int(y * sy)), color
 
-    if target.lower() == "elephant":
+    if target.lower() == "light bulb":
+        # Quick, Draw! prototypes are stroke sketches: an outline bulb scores
+        # far above a filled one, and sun-like rays flip the class to "sun".
+        _put(canvas, scale(_ring(12, 9, 6, "#F59E0B")), width, height)
+        _put(canvas, scale(_line(9, 14, 9, 17, "#94A3B8")), width, height)
+        _put(canvas, scale(_line(15, 14, 15, 17, "#94A3B8")), width, height)
+        _put(canvas, scale(_line(9, 17, 15, 17, "#94A3B8")), width, height)
+        _put(canvas, scale(_line(10, 19, 14, 19, "#475569")), width, height)
+    elif target.lower() == "elephant":
         _put(canvas, scale(_ellipse(12, 12, 8, 6, "#8B95A5")), width, height)
         _put(canvas, scale(_ellipse(5, 10, 3, 4, "#758091")), width, height)
         _put(canvas, scale(_ellipse(19, 10, 3, 4, "#758091")), width, height)

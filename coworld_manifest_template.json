@@ -6,8 +6,8 @@
     "pixel-art"
   ],
   "game": {
-    "name": "codrawing",
-    "description": "Five agents coordinate through one public message and one pixel per turn to draw a shared target. This MVP is judged by a human through its replay viewer.",
+    "name": "coplace",
+    "description": "co/place: an r/place-inspired board where five agents coordinate through one public message and one pixel per turn to draw a shared target. Every turn, a small frozen classifier (SqueezeNet for animal targets, a Quick, Draw! shape model for light bulb) returns shared feedback; a human can also judge the replay.",
     "owner": "Alessandro",
     "runnable": {
       "type": "game",
@@ -18,6 +18,9 @@
         "codrawing.game.server"
       ],
       "source_url": "https://github.com/SolbiatiAlessandro/codrawing"
+    },
+    "replay_viewer": {
+      "bundle": "build/static-replay-viewer"
     },
     "config_schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -74,6 +77,11 @@
           "minimum": 1,
           "maximum": 200
         },
+        "turns_per_round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
         "targets": {
           "type": "array",
           "minItems": 1,
@@ -83,7 +91,8 @@
             "enum": [
               "cat",
               "dog",
-              "elephant"
+              "elephant",
+              "light bulb"
             ]
           }
         },
@@ -107,12 +116,108 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "additionalProperties": false,
+      "$defs": {
+        "prediction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label",
+            "probability"
+          ],
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "image_model_feedback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "model",
+            "turn",
+            "target_score",
+            "score_delta",
+            "pass_threshold",
+            "passing",
+            "target_rank",
+            "label_count",
+            "best_target_label",
+            "top_predictions"
+          ],
+          "properties": {
+            "model": {
+              "type": "string",
+              "enum": [
+                "squeezenet1_1_imagenet1k_v1",
+                "quickdraw_nearest_prototype_v1"
+              ]
+            },
+            "turn": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "target_score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "score_delta": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1
+            },
+            "pass_threshold": {
+              "type": "number",
+              "enum": [
+                0.5,
+                0.95
+              ]
+            },
+            "passing": {
+              "type": "boolean"
+            },
+            "target_rank": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "label_count": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 1000
+            },
+            "best_target_label": {
+              "type": "string"
+            },
+            "top_predictions": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5,
+              "items": {
+                "$ref": "#/$defs/prediction"
+              }
+            }
+          }
+        }
+      },
       "required": [
         "scores",
         "target",
         "turns",
         "accepted_pixels",
-        "final_canvas"
+        "final_canvas",
+        "image_model",
+        "evaluation_threshold",
+        "best_target_score",
+        "evaluation_passed",
+        "final_image_model_feedback",
+        "image_model_score_trace"
       ],
       "properties": {
         "scores": {
@@ -128,7 +233,8 @@
           "enum": [
             "cat",
             "dog",
-            "elephant"
+            "elephant",
+            "light bulb"
           ]
         },
         "turns": {
@@ -149,6 +255,46 @@
           "items": {
             "type": "string",
             "pattern": "^#[0-9A-F]{6}$"
+          }
+        },
+        "image_model": {
+          "type": "string",
+          "enum": [
+            "squeezenet1_1_imagenet1k_v1",
+            "quickdraw_nearest_prototype_v1"
+          ]
+        },
+        "evaluation_threshold": {
+          "type": "number",
+          "enum": [
+            0.5,
+            0.95
+          ]
+        },
+        "best_target_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "round_scores": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "evaluation_passed": {
+          "type": "boolean"
+        },
+        "final_image_model_feedback": {
+          "$ref": "#/$defs/image_model_feedback"
+        },
+        "image_model_score_trace": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/image_model_feedback"
           }
         }
       }
@@ -187,9 +333,42 @@
   ],
   "variants": [
     {
+      "id": "light-bulb",
+      "name": "Light bulb",
+      "description": "A 24x24, five-agent episode drawing a light bulb in rounds, scored every turn by a Quick, Draw! shape classifier with per-round score logging.",
+      "game_config": {
+        "width": 24,
+        "height": 24,
+        "max_turns": 100,
+        "turns_per_round": 10,
+        "targets": [
+          "light bulb"
+        ],
+        "player_connect_timeout_seconds": 120,
+        "action_timeout_seconds": 60,
+        "players": [
+          {
+            "name": "Artist 1"
+          },
+          {
+            "name": "Artist 2"
+          },
+          {
+            "name": "Artist 3"
+          },
+          {
+            "name": "Artist 4"
+          },
+          {
+            "name": "Artist 5"
+          }
+        ]
+      }
+    },
+    {
       "id": "human-review",
       "name": "Human review",
-      "description": "A 24x24, five-agent episode with enough turns for a compact pixel drawing.",
+      "description": "A 24x24, five-agent episode with a small shared image classifier reporting progress every turn.",
       "game_config": {
         "width": 24,
         "height": 24,

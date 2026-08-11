@@ -58,7 +58,24 @@ class WorkflowHelpersTest(unittest.TestCase):
                 request["game_config_overrides"]["player_connect_timeout_seconds"],
                 120,
             )
-            self.assertEqual(request["game_config_overrides"]["action_timeout_seconds"], 60)
+            self.assertEqual(request["game_config_overrides"]["action_timeout_seconds"], 120)
+            self.assertEqual(request["game_config_overrides"]["turns_per_round"], 10)
+            self.assertEqual(request["variant_id"], "human-review")
+
+    def test_xp_request_routes_light_bulb_to_its_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "request.json"
+            create(
+                "cow_00000000-0000-0000-0000-000000000000",
+                "artist:v1",
+                output,
+                50,
+                "light bulb",
+                "test-key",
+            )
+            request = json.loads(output.read_text())
+            self.assertEqual(request["variant_id"], "light-bulb")
+            self.assertEqual(request["game_config_overrides"]["targets"], ["light bulb"])
 
     def test_strict_log_check_requires_every_agent_and_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

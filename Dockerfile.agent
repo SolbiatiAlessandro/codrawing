@@ -1,0 +1,30 @@
+# Slim player-only image for full agent-harness seats.
+# Softmax limits player images to 512 MiB. This image contains only the
+# player code, websockets, and the native Claude Code binary (no Node,
+# no game server, no onnx).
+
+FROM docker.io/library/python:3.12-slim
+
+RUN pip install --no-cache-dir websockets==15.0.1 claude-agent-sdk==0.2.134
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && HOME=/opt/claude-install bash -c 'curl -fsSL https://claude.ai/install.sh | bash -s 2.1.226' \
+    && install -m 755 "$(readlink -f /opt/claude-install/.local/bin/claude)" /usr/local/bin/claude \
+    && rm -rf /opt/claude-install \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && /usr/local/bin/claude --version
+
+ENV PYTHONPATH=/app
+WORKDIR /app
+COPY codrawing /app/codrawing
+
+# Claude Code refuses permission-bypass mode as root, so seats run as a
+# normal user.
+RUN useradd --create-home --uid 1000 agent
+USER agent
+ENV HOME=/home/agent
+
+CMD ["python", "-m", "codrawing.player.agent_player"]

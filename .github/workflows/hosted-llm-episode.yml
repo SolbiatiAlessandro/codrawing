@@ -11,7 +11,12 @@ on:
       turns:
         description: Number of drawing turns
         required: true
-        default: "50"
+        default: "100"
+        type: string
+      turns_per_round:
+        description: Turns per round (round scores are logged for the leaderboard)
+        required: true
+        default: "10"
         type: string
       target:
         description: Image target
@@ -22,6 +27,15 @@ on:
           - cat
           - dog
           - elephant
+          - light bulb
+      policy_module:
+        description: Player policy module
+        required: true
+        default: codrawing.player.llm_player
+        type: choice
+        options:
+          - codrawing.player.llm_player
+          - codrawing.player.agent_player
 
 permissions:
   contents: read
@@ -29,7 +43,7 @@ permissions:
 jobs:
   run-five-llms:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       COWORLD_VERSION: "0.1.35"
       SOFTMAX_CLI_VERSION: "0.26.27"
@@ -71,6 +85,10 @@ jobs:
             "${GITHUB_SHA}"
           coworld build --project . --version "0.1.${GITHUB_RUN_NUMBER}"
           coworld certify dist/coworld_manifest.json --no-open-report --timeout-seconds 180
+          if [[ "${{ inputs.policy_module }}" == *agent_player ]]; then
+            docker build -f Dockerfile.agent -t coworld-coplace-agent:latest .
+            docker image inspect coworld-coplace-agent:latest --format 'Agent image size: {{.Size}} bytes'
+          fi
 
       - name: Upload Coworld and strict LLM policy
         id: upload
@@ -87,10 +105,17 @@ jobs:
           fi
 
           policy_name="${GITHUB_ACTOR}-codrawing-llm-${GITHUB_RUN_ID}"
-          coworld upload-policy coworld-codrawing:latest \
+          image_ref="$(jq -r '.game.runnable.image' dist/coworld_manifest.json)"
+          if [[ "${{ inputs.policy_module }}" == *agent_player ]]; then
+            image_ref="coworld-coplace-agent:latest"
+          fi
+          coworld upload-policy "${image_ref}" \
             --name "${policy_name}" \
-            --run python --run -m --run codrawing.player.llm_player \
+            --run python --run -m --run "${{ inputs.policy_module }}" \
             --secret-env REQUIRE_LLM=true \
+            --secret-env MODEL_STAGGER_SECONDS=1 \
+            --secret-env AGENT_MODEL="${{ inputs.model }}" \
+            --secret-env AGENT_TIMEOUT_SECONDS=85 \
             --use-bedrock \
             --bedrock-model "${{ inputs.model }}" 2>&1 | tee hosted-artifacts/upload-policy.log
           policy_ref="$(sed -n 's/^Upload complete: //p' hosted-artifacts/upload-policy.log | tail -n 1)"
@@ -112,13 +137,14 @@ jobs:
             hosted-artifacts/xp-request.json \
             "${{ inputs.turns }}" \
             "${{ inputs.target }}" \
-            "codrawing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            "codrawing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "${{ inputs.turns_per_round }}"
 
           coworld xp-request create hosted-artifacts/xp-request.json --json \
             | tee hosted-artifacts/xp-created.json
           request_id="$(jq -r '.id' hosted-artifacts/xp-created.json)"
 
-          for _ in $(seq 1 120); do
+          for _ in $(seq 1 280); do
             coworld xp-request get "${request_id}" --json > hosted-artifacts/xp-status.json
             status="$(jq -r '.status' hosted-artifacts/xp-status.json)"
             echo "Experience Request ${request_id}: ${status}"
@@ -163,7 +189,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Five-LLM Codrawing episode"
+            echo "## Five-LLM co/place episode"
             echo
             echo "- Model: \`${{ inputs.model }}\`"
             echo "- Target: \`${{ inputs.target }}\`"

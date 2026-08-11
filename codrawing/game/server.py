@@ -17,6 +17,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
 from codrawing.game.engine import PixelArtEngine, choose_target
+from codrawing.game.image_model import TargetScorerRouter, scorer_from_environment
 
 
 CLIENT_DIR = Path(__file__).parent / "client"
@@ -99,10 +100,18 @@ class GameRuntime:
         self.players: dict[int, WebSocket] = {}
         self.global_viewers: set[WebSocket] = set()
         self.pending_actions: dict[int, dict[str, Any]] = {}
+        self.last_resolution: dict[str, Any] = {
+            "accepted_slots": [],
+            "collision_slots": [],
+        }
         self.action_event = asyncio.Event()
         self.started = False
         self.finished = False
         self.frames: list[dict[str, Any]] = []
+        self.image_model: TargetScorerRouter | None = scorer_from_environment() if TOKENS else None
+        self.image_model_feedback: dict[str, Any] | None = None
+        self.image_model_score_trace: list[dict[str, Any]] = []
+        self.round_scores: list[float] = []
         episode_seed = CONFIG.get("seed")
         if TOKENS and episode_seed is None:
             episode_seed = secrets.randbits(63)
@@ -114,10 +123,47 @@ class GameRuntime:
                 max_turns=int(CONFIG["max_turns"]),
                 target=choose_target(CONFIG["targets"], episode_seed),
                 player_names=PLAYER_NAMES,
+                turns_per_round=(
+                    int(CONFIG["turns_per_round"]) if CONFIG.get("turns_per_round") else None
+                ),
             )
             if TOKENS
             else None
         )
+        if self.engine is not None and self.image_model is not None:
+            self.image_model_feedback = self._score_canvas()
+            self.image_model_score_trace.append(self.image_model_feedback)
+
+    def _score_canvas(self) -> dict[str, Any]:
+        assert self.engine is not None
+        assert self.image_model is not None
+        previous_score = (
+            float(self.image_model_feedback["target_score"])
+            if self.image_model_feedback is not None
+            else None
+        )
+        return self.image_model.score(
+            canvas=self.engine.canvas,
+            width=self.engine.width,
+            height=self.engine.height,
+            target=self.engine.target,
+            turn=self.engine.turn,
+            previous_score=previous_score,
+        )
+
+    def score_canvas(self) -> None:
+        if self.image_model is None:
+            return
+        self.image_model_feedback = self._score_canvas()
+        self.image_model_score_trace.append(self.image_model_feedback)
+
+    def snapshot(self, *, turn_messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        assert self.engine is not None
+        snapshot = self.engine.snapshot(turn_messages=turn_messages)
+        if self.image_model_feedback is not None:
+            snapshot["image_model_feedback"] = self.image_model_feedback.copy()
+        snapshot["round_scores"] = self.round_scores.copy()
+        return snapshot
 
 
 runtime = GameRuntime()
@@ -167,7 +213,7 @@ async def global_viewer(websocket: WebSocket) -> None:
     runtime.global_viewers.add(websocket)
     try:
         if runtime.engine is not None:
-            await websocket.send_json(runtime.engine.snapshot())
+            await websocket.send_json(runtime.snapshot())
         async for _ in websocket.iter_json():
             pass
     finally:
@@ -202,10 +248,20 @@ async def player(websocket: WebSocket) -> None:
             engine = runtime.engine
             if engine is None or runtime.finished:
                 continue
-            if raw.get("turn") != engine.turn or slot in runtime.pending_actions:
+            if raw.get("turn") != engine.turn:
+                continue
+            if raw.get("type") == "message":
+                # Live board post: visible to every seat immediately, outside
+                # the paint barrier.
+                if engine.post_message(slot, str(raw.get("text", ""))):
+                    await _broadcast_board_update(engine.messages[-1])
+                continue
+            if slot in runtime.pending_actions:
                 continue
             runtime.pending_actions[slot] = raw
-            if len(runtime.pending_actions) == len(TOKENS):
+            # Barrier: the turn resolves once every currently connected player
+            # has painted, so per-agent latency never costs anyone a write.
+            if len(runtime.pending_actions) >= max(1, len(runtime.players)):
                 runtime.action_event.set()
     finally:
         if runtime.players.get(slot) is websocket:
@@ -233,13 +289,35 @@ async def _play_game() -> None:
             pass
 
         resolution = engine.resolve(runtime.pending_actions)
-        snapshot = engine.snapshot(turn_messages=resolution["messages"])
+        runtime.last_resolution = resolution
+        runtime.score_canvas()
+        if runtime.image_model_feedback is not None and (
+            engine.turn % engine.turns_per_round == 0 or engine.done
+        ):
+            runtime.round_scores.append(float(runtime.image_model_feedback["target_score"]))
+        snapshot = runtime.snapshot(turn_messages=resolution["messages"])
         snapshot["accepted_slots"] = resolution["accepted_slots"]
         snapshot["collision_slots"] = resolution["collision_slots"]
         runtime.frames.append(snapshot)
         await _broadcast_globals(snapshot)
 
     results = engine.results()
+    if runtime.image_model_feedback is not None:
+        # The team competes on the best classifier score reached within the
+        # episode's turn budget, so a late regression cannot erase progress.
+        best_score = max(
+            float(feedback["target_score"])
+            for feedback in runtime.image_model_score_trace
+        )
+        threshold = float(runtime.image_model_feedback["pass_threshold"])
+        results["scores"] = [best_score] * len(engine.player_names)
+        results["best_target_score"] = best_score
+        results["round_scores"] = runtime.round_scores.copy()
+        results["image_model"] = runtime.image_model_feedback["model"]
+        results["evaluation_threshold"] = threshold
+        results["evaluation_passed"] = best_score > threshold
+        results["final_image_model_feedback"] = runtime.image_model_feedback
+        results["image_model_score_trace"] = runtime.image_model_score_trace
     replay = {"config": CONFIG, "frames": runtime.frames, "results": results}
     write_data(
         RESULTS_URI,
@@ -264,12 +342,14 @@ async def _broadcast_players(*, final: bool = False) -> None:
     engine = runtime.engine
     stale: list[int] = []
     for slot, websocket in list(runtime.players.items()):
-        payload = engine.snapshot()
+        payload = runtime.snapshot()
         payload.update(
             {
                 "type": "final" if final else "observation",
                 "slot": slot,
                 "recent_messages": engine.messages[-25:],
+                "previous_accepted_slots": runtime.last_resolution["accepted_slots"],
+                "previous_collision_slots": runtime.last_resolution["collision_slots"],
             }
         )
         try:
@@ -278,6 +358,16 @@ async def _broadcast_players(*, final: bool = False) -> None:
             stale.append(slot)
     for slot in stale:
         runtime.players.pop(slot, None)
+
+
+async def _broadcast_board_update(message: dict[str, Any]) -> None:
+    payload = {"type": "board_update", "message": message.copy()}
+    for sockets in (list(runtime.players.values()), list(runtime.global_viewers)):
+        for websocket in sockets:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
 
 
 async def _broadcast_globals(snapshot: dict[str, Any]) -> None:

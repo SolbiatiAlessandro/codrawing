@@ -6,3 +6,6 @@ runs/
 ci-artifacts/
 tmp/
 .DS_Store
+permanent_coworld/state/
+permanent_coworld/agents/*/.session.json
+build/
